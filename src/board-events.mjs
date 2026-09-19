@@ -28,6 +28,22 @@ const PREVIEW_LIMIT = 80;
 // rendering their otherwise-orphaned "node_result" event.
 const NODELESS_TOOLS = new Set(["record_hypothesis_verdict", "conclude_investigation"]);
 
+/**
+ * The investigator self-reports which evidence tool a verdict rests on, and it often adds
+ * detail ("get_weather (northeast)", "get_inventory_status for SKU-101"). The board links a
+ * verdict to its evidence card by tool name, so an exact-match lookup silently dropped every
+ * decorated verdict: the card stayed "analysis pending" and its red line never appeared.
+ * Keep just the real tool name when one is in the text; otherwise return the text trimmed.
+ */
+function normalizeEvidenceSource(evidenceSource) {
+  if (typeof evidenceSource !== "string") return evidenceSource;
+  const text = evidenceSource.trim().toLowerCase();
+  const known = Object.keys(EVIDENCE_SOURCE_BY_TOOL)
+    .filter((tool) => text.includes(tool))
+    .sort((a, b) => text.indexOf(a) - text.indexOf(b));
+  return known[0] ?? evidenceSource.trim();
+}
+
 function describeEvidenceSource(toolName) {
   return EVIDENCE_SOURCE_BY_TOOL[toolName] ?? "Unknown";
 }
@@ -48,7 +64,7 @@ function toVerdictEdgeEvent(args) {
   const { hypothesis, evidenceSource, verdict, confidence } = args ?? {};
   try {
     const classified = classifyConnection({ verdict, confidence });
-    return { type: "edge_added", hypothesis, evidenceSource, ...classified };
+    return { type: "edge_added", hypothesis, evidenceSource: normalizeEvidenceSource(evidenceSource), ...classified };
   } catch {
     return null;
   }
@@ -89,4 +105,4 @@ function toBoardEvent(streamEvent) {
   return null;
 }
 
-export { describeEvidenceSource, summarizeEvidenceResult, toBoardEvent, NODELESS_TOOLS };
+export { describeEvidenceSource, normalizeEvidenceSource, summarizeEvidenceResult, toBoardEvent, NODELESS_TOOLS };

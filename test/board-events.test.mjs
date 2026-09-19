@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { describeEvidenceSource, summarizeEvidenceResult, toBoardEvent } from "../src/board-events.mjs";
+import { describeEvidenceSource, normalizeEvidenceSource, summarizeEvidenceResult, toBoardEvent } from "../src/board-events.mjs";
 
 test("describeEvidenceSource maps known evidence tools to a board label", () => {
   assert.equal(describeEvidenceSource("get_inventory_status"), "Inventory");
@@ -82,4 +82,37 @@ test("toBoardEvent turns an approval_required stream event into an approval_requ
 
 test("toBoardEvent returns null for an unrecognized stream event type (invalid input case)", () => {
   assert.equal(toBoardEvent({ type: "something_else" }), null);
+});
+
+test("normalizeEvidenceSource keeps just the tool name when the model adds detail to it (the missing-red-line bug)", () => {
+  assert.equal(normalizeEvidenceSource("get_weather (northeast)"), "get_weather");
+  assert.equal(normalizeEvidenceSource("get_inventory_status (SKU-101)"), "get_inventory_status");
+  assert.equal(normalizeEvidenceSource("  Get_Inventory_Status for SKU-447 "), "get_inventory_status");
+  assert.equal(normalizeEvidenceSource("the get_sku_sales_breakdown tool"), "get_sku_sales_breakdown");
+});
+
+test("normalizeEvidenceSource leaves an exact tool name unchanged", () => {
+  assert.equal(normalizeEvidenceSource("get_refund_events"), "get_refund_events");
+});
+
+test("normalizeEvidenceSource picks the first tool named when a source mentions two", () => {
+  assert.equal(normalizeEvidenceSource("get_sku_sales_breakdown then get_inventory_status"), "get_sku_sales_breakdown");
+});
+
+test("normalizeEvidenceSource passes through an unrecognized source and non-strings untouched (invalid input case)", () => {
+  assert.equal(normalizeEvidenceSource("  some other source  "), "some other source");
+  assert.equal(normalizeEvidenceSource(undefined), undefined);
+  assert.equal(normalizeEvidenceSource(null), null);
+  assert.equal(normalizeEvidenceSource(""), "");
+});
+
+test("a verdict on a decorated evidence source still reaches the board under the real tool name", () => {
+  const event = toBoardEvent({
+    type: "tool_call",
+    toolName: "record_hypothesis_verdict",
+    args: { hypothesis: "Stockout was limited", evidenceSource: "get_inventory_status (SKU-101)", verdict: "confirmed", confidence: 75 },
+  });
+  assert.equal(event.evidenceSource, "get_inventory_status");
+  assert.equal(event.edgeStyle, "solid-red");
+  assert.equal(event.confidence, 75);
 });

@@ -340,12 +340,17 @@ function setNodeResult(id, summary) {
   if (state.selectedNodeId === id) updateBoardReadout(node);
 }
 
-/** Links a self-reported verdict to the most recent still-unlinked node from the same evidence source. */
+/**
+ * Links a self-reported verdict to the most recent still-unlinked card from the same evidence
+ * source. If the model named a source no card matches, fall back to the most recent unlinked
+ * evidence card: the verdict tool is meant to be called right after the evidence call it rests
+ * on, and dropping the verdict instead would leave a confirmed lead with no red line.
+ */
 function addConnectionEdge({ hypothesis, evidenceSource, verdict, confidence, edgeStyle }) {
-  const edge = [...state.edges].reverse().find((e) => {
-    const target = resolveEnd(e.target);
-    return e.hidden && target?.source === evidenceSource;
-  });
+  const unlinked = [...state.edges].reverse().filter((e) => e.hidden);
+  const isEvidence = (e) => !String(resolveEnd(e.target)?.source).startsWith("propose_");
+  const edge =
+    unlinked.find((e) => resolveEnd(e.target)?.source === evidenceSource) ?? unlinked.find(isEvidence);
   if (!edge) return;
   const node = resolveEnd(edge.target);
   node.verdict = verdict;
@@ -429,8 +434,10 @@ function showApproval(event) {
 
 function hideApprovalWithOutcome(event) {
   el("approval").classList.add("hidden");
+  // The conclusion box is a flex row (icon + text column): the outcome belongs under the text,
+  // not as a third column floating to its right.
   const box = el("conclusion");
-  box.insertAdjacentHTML("beforeend", `<div class="approval-outcome">Fix ${escapeHtml(event.outcome)}.</div>`);
+  (box.querySelector("div") ?? box).insertAdjacentHTML("beforeend", `<div class="approval-outcome">Fix ${escapeHtml(event.outcome)}.</div>`);
 }
 
 function handleBoardEvent(event) {
