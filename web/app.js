@@ -33,6 +33,37 @@ const state = {
 
 const el = (id) => document.getElementById(id);
 
+const PHASES = ["evidence", "leads", "senior", "decision"];
+const PHASE_COPY = {
+  ready: "Ready to investigate",
+  evidence: "Gathering evidence",
+  leads: "Testing leads",
+  senior: "Senior review",
+  decision: "Awaiting decision",
+  closing: "Closing the case",
+  closed: "Case closed",
+};
+
+function renderInvestigationPhase(phase = "ready") {
+  const tracker = el("investigation-phase");
+  if (!tracker) return;
+  const activeIndex = PHASES.indexOf(phase === "closing" || phase === "closed" ? "decision" : phase);
+  el("phase-live").innerHTML = `<i class="ph ${phase === "closed" ? "ph-check-circle" : "ph-push-pin-simple"}"></i> ${escapeHtml(PHASE_COPY[phase] ?? PHASE_COPY.ready)}`;
+  tracker.setAttribute("aria-label", `Investigation phase: ${PHASE_COPY[phase] ?? PHASE_COPY.ready}`);
+  tracker.dataset.phase = phase;
+  tracker.querySelectorAll(".phase-steps li").forEach((step, index) => {
+    step.classList.toggle("is-complete", activeIndex >= 0 && index < activeIndex);
+    step.classList.toggle("is-active", activeIndex === index && phase !== "closed");
+    if (phase === "closed" && index === PHASES.length - 1) step.classList.add("is-complete");
+  });
+}
+
+function setInvestigationPhase(phase) {
+  if (!state.caseId) return;
+  viewFor(state.caseId).phase = phase;
+  renderInvestigationPhase(phase);
+}
+
 function escapeHtml(str) {
   return String(str ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -451,12 +482,19 @@ function handleBoardEvent(event) {
   logEvent(ICON_BY_EVENT_TYPE[event.type] ?? "ph-info", describeEventForLog(event), extraClass);
   if (event.type === "node_added") addEvidenceNode(event.id, event.label, event.detail, event.source);
   else if (event.type === "node_result") setNodeResult(event.id, event.summary, event.detail);
-  else if (event.type === "edge_added") addConnectionEdge(event);
+  else if (event.type === "edge_added") {
+    addConnectionEdge(event);
+    setInvestigationPhase("leads");
+  }
   else if (event.type === "conclusion") renderConclusion(event);
   else if (event.type === "approval_required") {
     showApproval(event);
     setCaseStatus(state.caseId, "awaiting");
-  } else if (event.type === "approval_resolved") hideApprovalWithOutcome(event);
+    setInvestigationPhase("decision");
+  } else if (event.type === "approval_resolved") {
+    hideApprovalWithOutcome(event);
+    setInvestigationPhase("closing");
+  }
 }
 
 function handleActivity(activity) {
@@ -507,6 +545,7 @@ function handleSummary({ text, fixOutcome }) {
   logEvent("ph-file-text", "Senior detective's summary is ready");
   logEvent("ph-check-circle", fixOutcome === "denied" ? "Case closed - fix declined" : "Case solved");
   setCaseStatus(state.caseId, fixOutcome === "denied" ? "closed" : "solved");
+  setInvestigationPhase("closed");
   stampCase(fixOutcome);
 }
 
@@ -519,6 +558,7 @@ function resetCaseClosure() {
 async function respondToApproval(decision) {
   setBusy(true);
   setCaseStatus(state.caseId, "investigating");
+  setInvestigationPhase("closing");
   el("approve-btn").disabled = true;
   el("deny-btn").disabled = true;
   try {
@@ -549,6 +589,7 @@ async function startInvestigation() {
   el("start-btn").disabled = true;
   setBusy(true);
   setCaseStatus(state.caseId, "investigating");
+  setInvestigationPhase("evidence");
   state.nodes = [];
   state.edges = [];
   state.selectedNodeId = null;
@@ -570,7 +611,10 @@ async function startInvestigation() {
       body: JSON.stringify({ caseId: state.caseId, resetMemory: el("reset-memory").checked }),
     });
     await consumeSSE(res, {
-      session: (data) => logEvent("ph-play", `Session started (${data.role ?? "investigator"})`),
+      session: (data) => {
+        if (data.role === "senior") setInvestigationPhase("senior");
+        logEvent("ph-play", `Session started (${data.role ?? "investigator"})`);
+      },
       activity: handleActivity,
       board_event: handleBoardEvent,
       summary: handleSummary,
@@ -625,6 +669,7 @@ function viewFor(caseId) {
       summary: { visible: false, text: "" },
       stamp: { visible: false, title: "", sub: "", declined: false },
       approval: { visible: false, text: "" },
+      phase: "ready",
     });
   }
   return caseViews.get(caseId);
@@ -673,6 +718,7 @@ function loadView(caseId) {
   el("case-stamp").classList.toggle("hidden", !v.stamp.visible);
   el("approval-text").textContent = v.approval.text;
   el("approval").classList.toggle("hidden", !v.approval.visible);
+  renderInvestigationPhase(v.phase);
 }
 
 function setCaseStatus(caseId, status) {

@@ -26,6 +26,15 @@
           <span class="case-id" id="topbar-case-id"><i class="ph ph-file-text"></i> <span id="topbar-case-label"></span></span>
         </div>
       </div>
+      <div id="investigation-phase" class="investigation-phase" role="status" aria-live="polite" aria-label="Investigation phase: ready">
+        <span class="phase-live" id="phase-live"><i class="ph ph-push-pin-simple"></i> Ready to investigate</span>
+        <ol class="phase-steps" aria-hidden="true">
+          <li data-phase="evidence"><span class="phase-pin"></span><span class="phase-step-label">Evidence</span></li>
+          <li data-phase="leads"><span class="phase-pin"></span><span class="phase-step-label">Leads</span></li>
+          <li data-phase="senior"><span class="phase-pin"></span><span class="phase-step-label">Senior</span></li>
+          <li data-phase="decision"><span class="phase-pin"></span><span class="phase-step-label">Decision</span></li>
+        </ol>
+      </div>
       <div class="controls">
         <label class="reset-memory">
           <input type="checkbox" id="reset-memory" />

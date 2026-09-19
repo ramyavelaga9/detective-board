@@ -8,6 +8,8 @@
   --ink-dim: #b9ab93;
   --red: #c23b3b;
   --red-deep: #8f2828;
+  --green: #4f9b63;
+  --green-deep: #2d6b42;
   --gray: #7d7368;
   --amber: #c2953b;
   --font-display: "Space Grotesk", sans-serif;
@@ -43,6 +45,7 @@ body {
 }
 
 .topbar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -81,6 +84,100 @@ body {
   font-size: 12px;
   color: var(--ink-dim);
   margin-top: 2px;
+}
+
+/* A compact chain of pinned steps: visible enough to narrate the live run,
+   restrained enough that the evidence board stays the main event. */
+.investigation-phase {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 448px;
+  transform: translate(-50%, -50%);
+  color: var(--ink-dim);
+  pointer-events: none;
+}
+
+.phase-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 132px;
+  color: #d8cbb5;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.phase-live i { color: var(--amber); font-size: 15px; }
+.investigation-phase[data-phase="closed"] .phase-live,
+.investigation-phase[data-phase="closed"] .phase-live i { color: #72bc83; }
+
+.phase-steps {
+  display: flex;
+  flex: 1;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.phase-steps li {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+  color: rgba(216, 203, 181, 0.66);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.phase-steps li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: calc(50% + 8px);
+  width: calc(100% - 16px);
+  height: 1px;
+  background: rgba(185, 171, 147, 0.2);
+}
+
+.phase-pin {
+  position: relative;
+  z-index: 1;
+  width: 13px;
+  height: 13px;
+  border: 2px solid #453426;
+  border-radius: 50%;
+  background: #281f18;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.phase-steps li.is-complete { color: #c9decf; }
+.phase-steps li.is-complete .phase-pin { border-color: var(--green-deep); background: var(--green); }
+.phase-steps li.is-complete::after { background: rgba(194, 149, 59, 0.64); }
+.phase-steps li.is-active { color: var(--ink); }
+.phase-steps li.is-active .phase-pin { border-color: #731f20; background: var(--red); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .phase-steps li.is-active .phase-pin {
+    animation: phase-pulse 1.35s ease-in-out infinite;
+  }
+}
+
+@keyframes phase-pulse {
+  50% { transform: translateY(-1px) scale(1.12); }
 }
 
 .controls {
@@ -605,7 +702,8 @@ button:disabled {
 
 /* The topbar's case label and the investigation controls only mean something once a case is open. */
 body[data-view="picker"] .case-id,
-body[data-view="picker"] .controls {
+body[data-view="picker"] .controls,
+body[data-view="picker"] .investigation-phase {
   display: none;
 }
 
@@ -982,8 +1080,33 @@ body[data-view="picker"] .controls {
   }
 }
 
+/* Keep the phase trail centered without competing with the controls once the
+   viewport loses its generous desktop width. */
+@media (max-width: 1120px) {
+  .investigation-phase {
+    min-width: 224px;
+    gap: 10px;
+  }
+
+  .phase-live {
+    min-width: auto;
+  }
+
+  .phase-step-label {
+    display: none;
+  }
+
+  .phase-steps li {
+    min-width: 34px;
+  }
+}
+
 /* Mobile (< 768px): the rail becomes a horizontal strip above the board instead of a left column. */
 @media (max-width: 768px) {
+  .investigation-phase {
+    display: none;
+  }
+
   .picker {
     overflow: visible;
   }
