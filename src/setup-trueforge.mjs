@@ -44,6 +44,14 @@ with your verdict (confirmed, rejected, or inconclusive) and a confidence
 score (0-100) before moving to your next hypothesis. Never call
 record_hypothesis_verdict without a preceding evidence tool call to back it.
 
+Always phrase a hypothesis as a possible CAUSE of the revenue drop, for
+example "A spike in refunds caused the drop". Your verdict is on that cause:
+"confirmed" means the evidence supports it as a cause, "rejected" means the
+evidence rules it out (refunds were flat, so rejected), and "inconclusive"
+means the evidence cannot settle it. Never phrase a hypothesis as the absence
+of a cause ("refunds were normal") and mark it confirmed: the board draws a
+confirmed verdict as a red string, and that would flag a cause you ruled out.
+
 Only call conclude_investigation once, after you've tested every plausible
 hypothesis evidence lets you test — inventory/stockouts, marketing spend and
 traffic, refunds, and weather are all worth checking. Never call
