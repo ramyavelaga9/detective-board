@@ -1,10 +1,10 @@
 // Detective Board — vanilla JS, no framework/build step.
 
 const CASE_NODE_ID = "__case__";
-const NODE_W = 128;
-const NODE_H = 56;
-const CASE_W = 176;
-const CASE_H = 76;
+const NODE_W = 184;
+const NODE_H = 108;
+const CASE_W = 224;
+const CASE_H = 112;
 
 const ICON_BY_EVENT_TYPE = {
   node_added: "ph-magnifying-glass",
@@ -20,6 +20,7 @@ const state = {
   caseId: "DB-1001",
   nodes: [],
   edges: [],
+  selectedNodeId: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -61,6 +62,15 @@ const nodeLayer = svg.append("g").attr("class", "nodes");
 let width = 0;
 let height = 0;
 
+function evidencePosition(index) {
+  const positions = [
+    [0.18, 0.20], [0.79, 0.18], [0.16, 0.58], [0.82, 0.56],
+    [0.31, 0.82], [0.68, 0.80], [0.50, 0.14], [0.50, 0.87],
+  ];
+  const [x, y] = positions[index % positions.length];
+  return { x: width * x, y: height * y };
+}
+
 /** Keeps every node's card fully on-screen regardless of viewport size, so a resize (or a phone rotation) never strands one off the edge. */
 function keepInBounds() {
   for (const node of state.nodes) {
@@ -73,9 +83,9 @@ function keepInBounds() {
 
 const simulation = d3
   .forceSimulation([])
-  .force("charge", d3.forceManyBody().strength(-380))
-  .force("link", d3.forceLink([]).id((d) => d.id).distance(170))
-  .force("collide", d3.forceCollide(78))
+  .force("charge", d3.forceManyBody().strength(-40))
+  .force("link", d3.forceLink([]).id((d) => d.id).distance(210))
+  .force("collide", d3.forceCollide(112))
   .force("bounds", keepInBounds);
 
 function resizeBoard() {
@@ -88,6 +98,14 @@ function resizeBoard() {
   if (caseNode) {
     caseNode.fx = width / 2;
     caseNode.fy = height / 2;
+  }
+  for (const node of state.nodes) {
+    if (node.layout && node.id !== CASE_NODE_ID) {
+      node.x = width * node.layout[0];
+      node.y = height * node.layout[1];
+      node.fx = node.x;
+      node.fy = node.y;
+    }
   }
   // Reheat so existing (non-fixed) nodes actually drift to the new center/bounds
   // instead of sitting wherever they were laid out for the previous viewport size.
@@ -110,15 +128,38 @@ function nodeClass(d) {
   return parts.join(" ");
 }
 
-/** A gentle downward sag on the string, proportional to its span, so it reads as a pinned thread rather than a ruled line. */
-function edgePath(edge) {
+/** A real thread hangs below its anchors; this is deliberately a deep cubic curve, not a graph edge. */
+function stringGeometry(edge) {
   const s = resolveEnd(edge.source);
   const t = resolveEnd(edge.target);
-  if (!s || !t) return "";
-  const midX = (s.x + t.x) / 2;
-  const sag = Math.min(24, Math.hypot(t.x - s.x, t.y - s.y) * 0.12);
-  const midY = (s.y + t.y) / 2 + sag;
-  return `M${s.x},${s.y} Q${midX},${midY} ${t.x},${t.y}`;
+  if (!s || !t) return null;
+  const sourcePin = pinPoint(s);
+  const targetPin = pinPoint(t);
+  const distance = Math.hypot(targetPin.x - sourcePin.x, targetPin.y - sourcePin.y);
+  const sag = Math.max(42, Math.min(116, distance * 0.28));
+  return { sourcePin, targetPin, sag };
+}
+
+function edgePath(edge) {
+  const geometry = stringGeometry(edge);
+  if (!geometry) return "";
+  const { sourcePin, targetPin, sag } = geometry;
+  return `M${sourcePin.x},${sourcePin.y} C${sourcePin.x},${sourcePin.y + sag} ${targetPin.x},${targetPin.y + sag} ${targetPin.x},${targetPin.y}`;
+}
+
+function stringMidpoint(edge) {
+  const geometry = stringGeometry(edge);
+  if (!geometry) return { x: 0, y: 0 };
+  const { sourcePin, targetPin, sag } = geometry;
+  return {
+    x: (sourcePin.x + targetPin.x) / 2,
+    y: (sourcePin.y + targetPin.y) / 2 + sag * 0.75,
+  };
+}
+
+function pinPoint(node) {
+  const h = node.type === "case" ? CASE_H : NODE_H;
+  return { x: node.x, y: node.y - h / 2 + 8 };
 }
 
 function dragBehavior() {
@@ -133,10 +174,9 @@ function dragBehavior() {
   }
   function ended(event, d) {
     if (!event.active) simulation.alphaTarget(0);
-    if (d.id !== CASE_NODE_ID) {
-      d.fx = null;
-      d.fy = null;
-    }
+    d.fx = event.x;
+    d.fy = event.y;
+    d.layout = null;
   }
   return d3.drag().on("start", started).on("drag", dragged).on("end", ended);
 }
@@ -147,11 +187,56 @@ function buildNodeCard(selection) {
     const isCase = d.type === "case";
     const w = isCase ? CASE_W : NODE_W;
     const h = isCase ? CASE_H : NODE_H;
-    g.append("rect").attr("class", "card").attr("x", -w / 2).attr("y", -h / 2).attr("width", w).attr("height", h).attr("rx", 8);
-    g.append("rect").attr("class", "accent").attr("x", -w / 2).attr("y", -h / 2).attr("width", 4).attr("height", h);
-    g.append("circle").attr("class", "pin").attr("cx", 0).attr("cy", -h / 2).attr("r", 3.5);
-    g.append("text").attr("class", "label").attr("text-anchor", "middle").attr("dy", isCase ? 5 : 4);
+    g.append("rect").attr("class", "card-shadow").attr("x", -w / 2 + 4).attr("y", -h / 2 + 5).attr("width", w).attr("height", h).attr("rx", 3);
+    g.append("rect").attr("class", "card").attr("x", -w / 2).attr("y", -h / 2).attr("width", w).attr("height", h).attr("rx", 2);
+    g.append("path").attr("class", "paper-fold").attr("d", `M${w / 2 - 20},${-h / 2}h20v20z`);
+    g.append("line").attr("class", "card-rule").attr("x1", -w / 2 + 16).attr("x2", w / 2 - 16).attr("y1", isCase ? 10 : 14).attr("y2", isCase ? 10 : 14);
+    g.append("text").attr("class", "source-label").attr("x", -w / 2 + 16).attr("y", -h / 2 + 37);
+    g.append("text").attr("class", "label").attr("x", -w / 2 + 16).attr("y", -h / 2 + (isCase ? 52 : 51));
+    g.append("text").attr("class", "verdict-label").attr("x", -w / 2 + 16).attr("y", h / 2 - 15);
+    g.append("circle").attr("class", "pin-shadow").attr("cx", 0).attr("cy", -h / 2 + 10).attr("r", 6.5);
+    g.append("circle").attr("class", "pin").attr("cx", 0).attr("cy", -h / 2 + 8).attr("r", 5.5);
+    g.append("circle").attr("class", "pin-glint").attr("cx", -1.7).attr("cy", -h / 2 + 6.2).attr("r", 1.35);
   });
+}
+
+function sourceLabel(node) {
+  if (node.type === "case") return "ACTIVE INVESTIGATION";
+  return String(node.source || "Evidence MCP").replace(/^get_/, "").replaceAll("_", " ").toUpperCase();
+}
+
+function verdictLabel(node) {
+  if (node.type === "case") return "Root cause under review";
+  if (!node.verdict) return "Lead collected · analysis pending";
+  const labels = { confirmed: "Confirmed causal lead", rejected: "Ruled out", inconclusive: "Needs more evidence" };
+  return labels[node.verdict] || "Assessment recorded";
+}
+
+function setMultilineText(selection, value, maxChars = 24) {
+  selection.each(function (d) {
+    const text = d3.select(this);
+    const words = String(value(d)).split(/\s+/);
+    const lines = [];
+    let line = "";
+    for (const word of words) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (candidate.length > maxChars && line) { lines.push(line); line = word; }
+      else line = candidate;
+    }
+    if (line) lines.push(line);
+    const x = text.attr("x");
+    text.text("");
+    lines.slice(0, 2).forEach((part, index) => text.append("tspan").attr("x", x).attr("dy", index ? 16 : 0).text(part));
+  });
+}
+
+function updateBoardReadout(node) {
+  const readout = el("board-readout");
+  if (!node || node.type === "case") {
+    readout.innerHTML = "Case board ready <span>Awaiting evidence</span>";
+    return;
+  }
+  readout.innerHTML = `${escapeHtml(node.label)} <span>${escapeHtml(verdictLabel(node))}</span>`;
 }
 
 function render() {
@@ -166,6 +251,7 @@ function render() {
   // corrupted a dash-offset "drawing" effect's units mid-flight.
   const edgeEnter = edgeSel.enter().append("g").attr("class", "edge-group animate-in");
   edgeEnter.append("path").attr("class", (d) => `edge ${d.edgeStyle}`);
+  edgeEnter.append("rect").attr("class", "edge-label-bg");
   edgeEnter.append("text").attr("class", "edge-label");
   edgeSel.select("path").attr("class", (d) => `edge ${d.edgeStyle}`);
   const edgeAll = edgeEnter.merge(edgeSel);
@@ -176,24 +262,46 @@ function render() {
   // Same reasoning as the edges above: only the update selection's class is
   // rewritten on verdict changes, so a freshly entering node's one-shot
   // "enter" class survives long enough to actually animate.
-  const nodeEnter = nodeSel.enter().append("g").attr("class", (d) => `${nodeClass(d)} enter`).call(dragBehavior());
+  const selectNode = (_event, d) => {
+    state.selectedNodeId = d.id;
+    updateBoardReadout(d);
+    render();
+  };
+  const nodeEnter = nodeSel.enter().append("g").attr("class", (d) => `${nodeClass(d)} enter`)
+    .attr("tabindex", 0).attr("role", "button").attr("aria-label", (d) => `Inspect ${d.label}`).call(dragBehavior())
+    .on("click", (_event, d) => {
+      selectNode(_event, d);
+    })
+    .on("keydown", (event, d) => {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectNode(event, d); }
+    });
   buildNodeCard(nodeEnter);
   nodeSel.attr("class", nodeClass);
-  const nodeAll = nodeEnter.merge(nodeSel);
-  nodeAll.select("text.label").text((d) => d.label);
+  const nodeAll = nodeEnter.merge(nodeSel).classed("selected", (d) => d.id === state.selectedNodeId);
+  nodeAll.select("text.source-label").text(sourceLabel);
+  nodeAll.select("text.verdict-label").text(verdictLabel);
+  setMultilineText(nodeAll.select("text.label"), (d) => d.label, 23);
 
   simulation.on("tick", () => {
     edgeAll.select("path").attr("d", edgePath);
     edgeAll.select("text").attr("x", (d) => {
       const s = resolveEnd(d.source);
       const t = resolveEnd(d.target);
-      return s && t ? (s.x + t.x) / 2 : 0;
+      return stringMidpoint(d).x;
     });
     edgeAll.select("text").attr("y", (d) => {
       const s = resolveEnd(d.source);
       const t = resolveEnd(d.target);
-      return s && t ? (s.y + t.y) / 2 - 6 : 0;
+      return stringMidpoint(d).y;
     });
+    edgeAll.select("rect.edge-label-bg").attr("x", (d) => {
+      const label = d.confidence != null ? `${d.confidence}%` : "";
+      const s = resolveEnd(d.source); const t = resolveEnd(d.target);
+      return stringMidpoint(d).x - (label.length * 3.6 + 9);
+    }).attr("y", (d) => {
+      const s = resolveEnd(d.source); const t = resolveEnd(d.target);
+      return stringMidpoint(d).y - 8;
+    }).attr("width", (d) => d.confidence != null ? `${d.confidence}%`.length * 7.2 + 18 : 0).attr("height", 18);
     nodeAll.attr("transform", (d) => `translate(${d.x},${d.y})`);
   });
 }
@@ -207,7 +315,11 @@ function restartSimulation() {
 
 function addEvidenceNode(id, label, source) {
   if (state.nodes.some((n) => n.id === id)) return;
-  state.nodes.push({ id, label, source, type: "evidence" });
+  const evidenceIndex = state.nodes.filter((n) => n.type === "evidence").length;
+  const position = evidencePosition(evidenceIndex);
+  const layouts = [[0.18, 0.20], [0.79, 0.18], [0.16, 0.58], [0.82, 0.56], [0.31, 0.82], [0.68, 0.80], [0.50, 0.14], [0.50, 0.87]];
+  // New evidence starts in a deliberate open slot and stays there until the user moves it.
+  state.nodes.push({ id, label, source, type: "evidence", ...position, layout: layouts[evidenceIndex % layouts.length], fx: position.x, fy: position.y });
   state.edges.push({ id: `link-${id}`, source: CASE_NODE_ID, target: id, edgeStyle: "dashed-gray", confidence: null, hidden: true });
   restartSimulation();
 }
@@ -215,6 +327,7 @@ function addEvidenceNode(id, label, source) {
 function setNodeResult(id, summary) {
   const node = state.nodes.find((n) => n.id === id);
   if (node) node.resultSummary = summary;
+  if (state.selectedNodeId === id) updateBoardReadout(node);
 }
 
 /** Links a self-reported verdict to the most recent still-unlinked node from the same evidence source. */
@@ -231,6 +344,7 @@ function addConnectionEdge({ hypothesis, evidenceSource, verdict, confidence, ed
   edge.confidence = confidence;
   edge.hidden = false;
   restartSimulation();
+  if (state.selectedNodeId === node.id) updateBoardReadout(node);
 }
 
 // ---- Case file panel + event log ----
@@ -321,12 +435,14 @@ async function startInvestigation() {
   el("start-btn").disabled = true;
   state.nodes = [];
   state.edges = [];
+  state.selectedNodeId = null;
   ensureCaseNode();
   restartSimulation();
   el("conclusion").className = "conclusion empty";
   el("conclusion").innerHTML = `<i class="ph ph-lightbulb-filament"></i><div>No conclusion yet. Start the investigation to build the case.</div>`;
   el("event-log").innerHTML = "";
   el("approval").classList.add("hidden");
+  updateBoardReadout();
 
   try {
     const res = await fetch("/api/investigate", {
@@ -350,6 +466,7 @@ window.addEventListener("resize", resizeBoard);
 resizeBoard();
 ensureCaseNode();
 restartSimulation();
+updateBoardReadout();
 
 el("start-btn").addEventListener("click", startInvestigation);
 el("approve-btn").addEventListener("click", () => respondToApproval("allow"));
