@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { describeEvidenceSource, normalizeEvidenceSource, summarizeEvidenceResult, toBoardEvent } from "../src/board-events.mjs";
+import { describeEvidenceFact, describeEvidenceSource, describeEvidenceSubject, normalizeEvidenceSource, summarizeEvidenceResult, toBoardEvent } from "../src/board-events.mjs";
 
 test("describeEvidenceSource maps known evidence tools to a board label", () => {
   assert.equal(describeEvidenceSource("get_inventory_status"), "Inventory");
@@ -33,14 +33,26 @@ test("summarizeEvidenceResult handles empty content without throwing (invalid in
   assert.equal(summarizeEvidenceResult(undefined), "No result content");
 });
 
+test("evidence subjects preserve the specific query that made a card", () => {
+  assert.equal(describeEvidenceSubject("get_inventory_status", { sku: "SKU-447" }), "SKU-447");
+  assert.equal(describeEvidenceSubject("get_weather", { region: "west", date: "2026-09-14" }), "West · 09/14");
+  assert.equal(describeEvidenceSubject("propose_marketing_action", { dailyAdSpend: 1200 }), "$1.2k/day restore");
+});
+
+test("evidence facts turn structured tool results into readable card details", () => {
+  assert.equal(describeEvidenceFact("get_inventory_status", '{"stock":0,"stockoutSince":"2026-09-16"}'), "0 on hand · out since 09/16");
+  assert.equal(describeEvidenceFact("get_weather", '{"condition":"heavy_rain","severe":true}'), "Heavy Rain · severe");
+  assert.equal(describeEvidenceFact("get_marketing_metrics", '[{"adSpend":1200},{"adSpend":300}]'), "$1.2k → $300/day");
+});
+
 test("toBoardEvent turns a plain evidence tool call into a node_added event", () => {
   const event = toBoardEvent({ type: "tool_call", toolCallId: "c1", toolName: "get_inventory_status", args: { sku: "SKU-447" } });
-  assert.deepEqual(event, { type: "node_added", id: "c1", label: "Inventory", source: "get_inventory_status" });
+  assert.deepEqual(event, { type: "node_added", id: "c1", label: "SKU-447", detail: "Collecting evidence…", source: "get_inventory_status" });
 });
 
 test("toBoardEvent turns a tool result into a node_result event", () => {
   const event = toBoardEvent({ type: "tool_result", toolCallId: "c1", toolName: "get_inventory_status", resultText: "[]" });
-  assert.deepEqual(event, { type: "node_result", id: "c1", summary: "0 records returned" });
+  assert.deepEqual(event, { type: "node_result", id: "c1", summary: "0 records returned", detail: "0 records returned" });
 });
 
 test("toBoardEvent turns a record_hypothesis_verdict call into a styled edge_added event", () => {

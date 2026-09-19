@@ -248,8 +248,9 @@ button:disabled {
   font-weight: 700;
 }
 
-.node text.source-label, .node text.verdict-label { pointer-events: none; }
-.node text.source-label { fill: #766858; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.04em; }
+.node text.source-label, .node text.evidence-detail, .node text.verdict-label { pointer-events: none; }
+.node text.source-label { fill: #584a3b; font-family: var(--font-mono); font-size: 10px; font-weight: 600; letter-spacing: 0.04em; }
+.node text.evidence-detail { fill: #625747; font-family: var(--font-body); font-size: 10px; font-weight: 600; }
 .node text.verdict-label { fill: #766858; font-family: var(--font-body); font-size: 10px; }
 .node.verdict-confirmed text.verdict-label { fill: #8c3029; font-weight: 700; }
 .node.verdict-inconclusive text.verdict-label { fill: #8a641d; font-weight: 700; }

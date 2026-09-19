@@ -200,9 +200,10 @@ function buildNodeCard(selection) {
     g.append("rect").attr("class", "card-shadow").attr("x", -w / 2 + 4).attr("y", -h / 2 + 5).attr("width", w).attr("height", h).attr("rx", 3);
     g.append("rect").attr("class", "card").attr("x", -w / 2).attr("y", -h / 2).attr("width", w).attr("height", h).attr("rx", 2);
     g.append("path").attr("class", "paper-fold").attr("d", `M${w / 2 - 20},${-h / 2}h20v20z`);
-    g.append("line").attr("class", "card-rule").attr("x1", -w / 2 + 16).attr("x2", w / 2 - 16).attr("y1", isCase ? 10 : 14).attr("y2", isCase ? 10 : 14);
-    g.append("text").attr("class", "source-label").attr("x", -w / 2 + 16).attr("y", -h / 2 + 37);
-    g.append("text").attr("class", "label").attr("x", -w / 2 + 16).attr("y", -h / 2 + (isCase ? 52 : 51));
+    g.append("line").attr("class", "card-rule").attr("x1", -w / 2 + 16).attr("x2", w / 2 - 16).attr("y1", isCase ? 10 : 4).attr("y2", isCase ? 10 : 4);
+    g.append("text").attr("class", "source-label").attr("x", -w / 2 + 16).attr("y", -h / 2 + (isCase ? 37 : 24));
+    g.append("text").attr("class", "label").attr("x", -w / 2 + 16).attr("y", -h / 2 + (isCase ? 52 : 46));
+    if (!isCase) g.append("text").attr("class", "evidence-detail").attr("x", -w / 2 + 16).attr("y", 25);
     g.append("text").attr("class", "verdict-label").attr("x", -w / 2 + 16).attr("y", h / 2 - 15);
     g.append("circle").attr("class", "pin-shadow").attr("cx", 0).attr("cy", -h / 2 + 10).attr("r", 6.5);
     g.append("circle").attr("class", "pin").attr("cx", 0).attr("cy", -h / 2 + 8).attr("r", 5.5);
@@ -291,6 +292,8 @@ function render() {
   nodeAll.select("text.source-label").text(sourceLabel);
   nodeAll.select("text.verdict-label").text(verdictLabel);
   setMultilineText(nodeAll.select("text.label"), (d) => d.label, 23);
+  nodeAll.select("text.evidence-detail").text((d) => d.detail || "Collecting evidence…");
+  nodeAll.attr("aria-label", (d) => d.type === "case" ? `Inspect ${d.label}` : `Inspect ${sourceLabel(d)}: ${d.label}. ${d.detail || "Collecting evidence"}`);
 
   simulation.on("tick", () => {
     edgeAll.select("path").attr("d", edgePath);
@@ -323,20 +326,23 @@ function restartSimulation() {
   render();
 }
 
-function addEvidenceNode(id, label, source) {
+function addEvidenceNode(id, label, detail, source) {
   if (state.nodes.some((n) => n.id === id)) return;
   const evidenceIndex = state.nodes.filter((n) => n.type === "evidence").length;
   const position = evidencePosition(evidenceIndex);
   const layouts = [[0.18, 0.20], [0.79, 0.18], [0.16, 0.58], [0.82, 0.56], [0.31, 0.82], [0.68, 0.80], [0.50, 0.14], [0.50, 0.87]];
   // New evidence starts in a deliberate open slot and stays there until the user moves it.
-  state.nodes.push({ id, label, source, type: "evidence", ...position, layout: layouts[evidenceIndex % layouts.length], fx: position.x, fy: position.y });
+  state.nodes.push({ id, label, detail, source, type: "evidence", ...position, layout: layouts[evidenceIndex % layouts.length], fx: position.x, fy: position.y });
   state.edges.push({ id: `link-${id}`, source: CASE_NODE_ID, target: id, edgeStyle: "dashed-gray", confidence: null, hidden: true });
   restartSimulation();
 }
 
-function setNodeResult(id, summary) {
+function setNodeResult(id, summary, detail) {
   const node = state.nodes.find((n) => n.id === id);
-  if (node) node.resultSummary = summary;
+  if (node) {
+    node.resultSummary = summary;
+    node.detail = detail || summary;
+  }
   if (state.selectedNodeId === id) updateBoardReadout(node);
 }
 
@@ -443,8 +449,8 @@ function hideApprovalWithOutcome(event) {
 function handleBoardEvent(event) {
   const extraClass = event.type === "edge_added" ? `verdict-${event.verdict}` : "";
   logEvent(ICON_BY_EVENT_TYPE[event.type] ?? "ph-info", describeEventForLog(event), extraClass);
-  if (event.type === "node_added") addEvidenceNode(event.id, event.label, event.source);
-  else if (event.type === "node_result") setNodeResult(event.id, event.summary);
+  if (event.type === "node_added") addEvidenceNode(event.id, event.label, event.detail, event.source);
+  else if (event.type === "node_result") setNodeResult(event.id, event.summary, event.detail);
   else if (event.type === "edge_added") addConnectionEdge(event);
   else if (event.type === "conclusion") renderConclusion(event);
   else if (event.type === "approval_required") {
