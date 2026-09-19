@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createToolCallAccumulator, resolveActualToolCall } from "../src/tool-call-accumulator.mjs";
+import { createToolCallAccumulator, resolveActualToolCall, peekActualToolName } from "../src/tool-call-accumulator.mjs";
 
 test("accumulates a name and arguments streamed across several deltas", () => {
   const acc = createToolCallAccumulator();
@@ -68,4 +68,26 @@ test("resolveActualToolCall returns null for malformed JSON args instead of thro
 
 test("resolveActualToolCall returns null for a null call", () => {
   assert.equal(resolveActualToolCall(null), null);
+});
+
+test("peekActualToolName returns a direct call's name as soon as it is known, before its args finish", () => {
+  const acc = createToolCallAccumulator();
+  const call = acc.applyDelta({ index: 0, id: "call_1", function: { name: "get_weather", arguments: '{"reg' } });
+  assert.equal(peekActualToolName(call), "get_weather");
+});
+
+test("peekActualToolName pulls a call_tool-wrapped name out of still-incomplete args", () => {
+  const acc = createToolCallAccumulator();
+  acc.applyDelta({ index: 0, id: "call_1", function: { name: "call_tool", arguments: '{"mcp_server":"detective-evidence","tool_na' } });
+  const early = acc.getById("call_1");
+  assert.equal(peekActualToolName(early), null, "the name hasn't fully streamed yet");
+  const call = acc.applyDelta({ index: 0, function: { arguments: 'me":"get_inventory_status","input":{"sk' } });
+  assert.equal(peekActualToolName(call), "get_inventory_status");
+  assert.equal(resolveActualToolCall(call), null, "the full call still isn't resolvable - that's the gap peeking closes");
+});
+
+test("peekActualToolName returns null for a missing or nameless call (invalid input case)", () => {
+  assert.equal(peekActualToolName(undefined), null);
+  assert.equal(peekActualToolName({ name: "", args: "" }), null);
+  assert.equal(peekActualToolName({ name: "call_tool", args: "{}" }), null);
 });

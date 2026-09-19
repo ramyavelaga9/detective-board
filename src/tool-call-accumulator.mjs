@@ -73,4 +73,19 @@ function resolveActualToolCall(call) {
   }
 }
 
-export { createToolCallAccumulator, resolveActualToolCall };
+/**
+ * Like resolveActualToolCall, but only needs the tool's NAME - so it works on
+ * a still-streaming call whose arguments JSON isn't complete yet. A direct
+ * call's name is known from its first delta; a call_tool-wrapped call's real
+ * name is pulled out of its partial args as soon as the "tool_name" value has
+ * fully streamed. Lets the UI announce a step the moment it starts instead of
+ * waiting for the whole call to finish streaming. Returns null if not known yet.
+ */
+function peekActualToolName(call) {
+  if (!call || !call.name) return null;
+  if (call.name !== "call_tool") return call.name;
+  const match = /"tool_name"\s*:\s*"([^"\\]+)"/.exec(call.args);
+  return match ? match[1] : null;
+}
+
+export { createToolCallAccumulator, resolveActualToolCall, peekActualToolName };
