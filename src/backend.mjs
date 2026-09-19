@@ -3,8 +3,8 @@
 // Serves the board UI and drives two TrueForge agents — a fast
 // "detective-investigator" that gathers evidence and a stronger
 // "detective-senior" that synthesizes a root cause once the investigator
-// concludes — relaying both as Server-Sent Events to the browser. Mirrors
-// PharmaFlow's backend.mjs: the board's nodes/edges are derived directly
+// concludes — relaying both as Server-Sent Events to the browser. The
+// board's nodes/edges are derived directly
 // from the real streamed tool calls/results (via board-events.mjs), not
 // from a second source of truth, and TrueForge's native
 // tool.approval_required pause is what actually gates propose_restock_action.

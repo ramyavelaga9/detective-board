@@ -13,7 +13,7 @@
 // reproducible on any machine, on any day, instead of drifting with when
 // it's actually run. A real deployment would swap this for a live
 // Shopify/GA4/etc. connection - this is a deliberately simple stand-in for
-// a hackathon prototype, the same role store.mjs plays in PharmaFlow.
+// a hackathon prototype.
 
 const HISTORY_DAYS = 65;
 const AVG_ORDER_VALUE = 85;

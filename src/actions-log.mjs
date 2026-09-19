@@ -3,13 +3,10 @@
 // log of consequences, not the live investigation state, and it must
 // survive independently of any one board run. Both actions are simulated
 // here (no real inventory-system or ad-platform integration exists), and
-// every record says so explicitly rather than looking like a real transaction —
-// the same honesty PharmaFlow's fulfillment.mjs applies to its own
-// simulated orders/notifications.
+// every record says so explicitly rather than looking like a real transaction.
 //
-// createActionsLog() is a factory (not a module-level singleton), the same
-// pattern as PharmaFlow's fulfillment.mjs, so tests can point it at a
-// scratch file instead of the real data file.
+// createActionsLog() is a factory (not a module-level singleton), so tests can
+// point it at a scratch file instead of the real data file.
 
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";

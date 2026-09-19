@@ -1,7 +1,6 @@
 // Translates one real TrueForge stream event into a board event the
-// frontend can render — the same role tool-telemetry.mjs and
-// tool-call-accumulator.mjs play in PharmaFlow's backend, but producing
-// board-shaped output (nodes, edges, conclusions) instead of a log line.
+// frontend can render, producing board-shaped output (nodes,
+// edges, conclusions).
 //
 // toBoardEvent never throws: a malformed or unexpected value from the
 // model (a bad verdict, missing args) degrades to a skipped or partial

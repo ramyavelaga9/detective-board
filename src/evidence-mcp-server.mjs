@@ -2,8 +2,7 @@
 //
 // Exposes the case's evidence sources as MCP tools over Streamable HTTP so
 // a TrueForge agent can gather real (if synthetic) evidence and log real
-// records — the "harder problem" piece of the hackathon brief, the same
-// role PharmaFlow's mcp-server.mjs plays. Register it in TrueForge
+// records — the "harder problem" piece of the hackathon brief. Register it in TrueForge
 // (Settings > Connectors, or via `npm run setup`) pointing at
 // http://localhost:8793/mcp.
 //
@@ -248,8 +247,8 @@ const app = express();
 app.use(express.json());
 
 // Stateless mode (sessionIdGenerator: undefined): each request is handled
-// independently with no session/initialize handshake to track, the same
-// choice PharmaFlow's mcp-server.mjs makes, matching TrueForge calling in
+// independently with no session/initialize handshake to track, matching
+// TrueForge calling in
 // as a plain remote MCP server rather than holding a long-lived connection.
 app.all("/mcp", async (req, res) => {
   if (req.headers.accept && req.headers.accept.includes("text/html")) {

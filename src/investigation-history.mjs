@@ -6,7 +6,7 @@
 // scope for the hackathon's time budget.
 //
 // createInvestigationHistory() is a factory (not a module-level
-// singleton), the same pattern as PharmaFlow's event-log.mjs, so tests can
+// singleton), so tests can
 // use a fresh instance instead of shared global state.
 
 import { assertValidVerdict } from "./verdict.mjs";

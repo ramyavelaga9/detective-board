@@ -3,8 +3,7 @@
 // synthesis — the "model routing by evidence type" piece of the brief),
 // its MCP server, and both agents on a locally running TrueForge instance
 // via its REST API, so the whole harness config is code (reviewable,
-// reproducible) instead of manual clicking through Settings. Mirrors
-// PharmaFlow's setup-trueforge.mjs.
+// reproducible) instead of manual clicking through Settings.
 //
 // Prereqs:
 //   1. TrueForge running locally: `npx @truefoundry/trueforge@latest`
@@ -30,7 +29,7 @@ const MCP_SERVER_NAME = "detective-evidence";
 
 // Named explicitly rather than relying on "@write"/"@destructive" default
 // categories, so approval-gating doesn't depend on annotation heuristics
-// working out — the same choice PharmaFlow's setup script makes.
+// working out.
 const AGENT_MCP_SERVERS = [
   { name: MCP_SERVER_NAME, require_approval_for_tools: ["propose_restock_action", "propose_marketing_action"] },
 ];
