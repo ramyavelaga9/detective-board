@@ -1,84 +1,143 @@
-# Detective Board — Autonomous Investigation Agent
+# Detective Board
 
-Detective Board investigates a real-world break the way a detective would:
-it gathers evidence from multiple sources via MCP tools, tests one specific
-hypothesis at a time, and builds a literal conspiracy board — evidence
-nodes, red strings between them, confidence scores on each connection — as
-it goes. It proposes a root cause and a fix, gated behind human approval
-before anything actually happens.
+An autonomous investigation agent that finds out why revenue dropped, and shows its work on a live conspiracy board.
 
-Built on [TrueForge](https://github.com/truefoundry/trueforge), the same
-open-source agent harness [pharmaflow](../pharmaflow) uses, for the Agent
-Harness Hackathon.
+It gathers evidence from several sources through MCP tools, tests one hypothesis at a time, and pins every verdict to the board as a red string with a confidence score. A second, stronger agent reads the whole trail, proposes one fix, and writes a plain-English summary. Nothing with a real side effect runs until a human clicks **Approve**.
+
+Built for the [Agent Harness Hackathon](https://luma.com/truefoundry-agent-harness-hackathon-sep19-2026) (TrueFoundry x HackerSquad, sponsored by OpenAI) on [TrueForge](https://github.com/truefoundry/trueforge), TrueFoundry's open-source agent harness.
+
+## What you see
+
+1. **Case picker.** The app opens on a box for every case. Pick one to open its board.
+2. **Case rail.** A slim list of all cases on the left, each with its status (Not started, Investigating, Awaiting approval, Solved, Closed). Each case keeps its own board, event log, summary, and phase while you switch. The rail locks while an investigation is running.
+3. **The board.** Every clue is a pinned paper card labeled with its evidence source. Red strings tie each verdict back to the case, with the agent's confidence score:
+
+   | Line | Verdict | Card label |
+   |---|---|---|
+   | Solid red | Confirmed | Confirmed causal lead |
+   | Dashed gray | Rejected | Ruled out |
+   | Dotted amber | Inconclusive | Needs more evidence |
+   | (no line) | No verdict recorded | Lead collected, analysis pending |
+
+   Click a card to inspect what the agent concluded about it.
+4. **Phase tracker.** Gathering evidence, testing leads, senior review, awaiting decision, case closed.
+5. **Live event log.** Every step as it starts: the model thinking (with elapsed seconds on slow steps), TrueForge's tool discovery, each tool call the moment its name arrives, every verdict, and the conclusion.
+6. **Case file.** The investigator's conclusion, the approval banner, and the senior detective's summary.
+7. **Case closed.** A "CASE SOLVED" stamp and confetti (a declined fix shows "CASE CLOSED" with no confetti).
 
 ## The cases
 
-The app opens on a case picker. Choosing a case opens its board, with a slim
-list of all cases on the left so you can switch between them; each case keeps
-its own board, event log, summary, and status while you do. Both cases are
-fixed and deterministic (see `src/evidence-store.mjs` for the synthetic
-datasets):
+Both cases are fixed and deterministic. The data is synthetic (see `src/evidence-store.mjs`), so every run starts from the same facts.
 
-- **DB-1001, Overnight revenue drop.** Revenue on Sep 17 fell sharply against
-  the prior 14-day average. The real cause is a stockout on one SKU that had
-  been a top seller the week before; marketing spend, refunds, and weather are
-  red herrings. The fix is a restock (`propose_restock_action`).
-- **DB-1002, Three-day revenue slide.** Revenue slipped over three days to
-  Sep 14. The real cause is a cut in paid ad spend, which took traffic down
-  with it while conversion stayed flat, so every SKU sold less. A low-stock
-  SKU, normal refunds, and a storm in one region are the red herrings. The fix
-  is restoring ad spend (`propose_marketing_action`).
+- **DB-1001, Overnight revenue drop.** Revenue on Sep 17 fell about a third against the prior 14-day average. The real cause is a stockout on one SKU that had been a top seller the week before. Marketing spend, refunds, and weather are red herrings. The fix is a restock (`propose_restock_action`).
+- **DB-1002, Three-day revenue slide.** Revenue slipped over three days to Sep 14. The real cause is a cut in paid ad spend, which took traffic down with it while conversion stayed flat, so every SKU sold less. A low-stock SKU, normal refunds, and a storm in one region are the red herrings. The fix is restoring ad spend (`propose_marketing_action`).
 
-Every evidence tool takes a `caseId`, so one MCP server serves all cases. Both
-fix tools are gated behind human approval and write to a simulated action log
-(`data/restock-actions.json`, `data/marketing-actions.json`).
+## How it works
 
-## Model routing
+```
+Browser (vanilla JS + D3)
+   |  POST /api/investigate, Server-Sent Events back
+Backend (Express, :8788)  ----- board events, activity events, summary
+   |  TrueForge SDK, turn streams
+TrueForge (:8790)  ----- detective-investigator (gpt-5-mini)
+   |                     detective-senior       (gpt-5)
+   |  MCP over Streamable HTTP
+Evidence MCP server (:8793)  ----- evidence tools + fix tools
+```
 
-Two TrueForge agents split the work by evidence type:
+1. **Investigator** (`detective-investigator`, OpenAI `gpt-5-mini`) gets a case brief. It tests one hypothesis at a time: it calls one evidence tool, then `record_hypothesis_verdict` with a verdict and confidence. It finishes with `conclude_investigation`.
+2. **Senior detective** (`detective-senior`, OpenAI `gpt-5`) is handed the investigator's conclusion and evidence trail once. It weighs the causes and calls the matching fix tool. It is the only agent allowed to.
+3. **Human approval.** `propose_restock_action` and `propose_marketing_action` are listed in `require_approval_for_tools`. TrueForge emits `tool.approval_required` and pauses the turn. The UI resumes it with the human's decision.
+4. **Summary.** After the decision, the senior writes a short plain-English summary. The backend sends it as a `summary` event and the UI closes the case.
 
-- **`detective-investigator`** (OpenAI `gpt-5-mini`, fast/cheap) runs the tool-calling
-  loop — form a hypothesis, call the evidence tool that tests it, record a
-  verdict — until it concludes.
-- **`detective-senior`** (OpenAI `gpt-5`, a stronger model than the investigator's
-  `gpt-5-mini`) is handed the full
-  evidence trail once, to synthesize a ranked root cause and propose the
-  one fix. Only this agent can call `propose_restock_action` or
-  `propose_marketing_action`, which are gated behind human approval via
-  TrueForge's native `tool.approval_required` pause.
+The board is derived directly from the real streamed tool calls (`src/board-events.mjs`), so there is no second source of truth. The investigator names its evidence source loosely (for example `get_weather (northeast)`), so the board normalizes it to the real tool name before linking a verdict to its card.
 
-## Memory
+### MCP tools
 
-A single lightweight, in-memory "investigation history" layer
-(`src/investigation-history.mjs`) tracks which hypotheses were already
-confirmed or rejected on this case, so a repeated run doesn't waste steps
-re-testing them. It's deliberately just this one layer — no schema memory,
-no business-context memory — scoped to fit the hackathon's time budget.
+Every evidence tool takes a required `caseId`, so one MCP server serves all cases.
 
-## Running it
+| Tool | Purpose |
+|---|---|
+| `get_revenue_deviation` | Headline anomaly: case-date revenue against the prior 14-day average |
+| `get_revenue_timeseries` | Daily revenue and orders |
+| `get_sku_sales_breakdown` | Per-SKU units and revenue for one date |
+| `get_inventory_status` | Stock level and stockout status for one SKU |
+| `get_marketing_metrics` | Daily ad spend, sessions, conversion rate |
+| `get_refund_events` | Daily refund counts, amounts, top reason |
+| `get_weather` | Weather condition for a region and date |
+| `record_hypothesis_verdict` | Self-reported verdict and confidence (drives the board) |
+| `conclude_investigation` | Root cause, confidence, recommended action |
+| `propose_restock_action` | **Approval-gated.** Logs a simulated restock |
+| `propose_marketing_action` | **Approval-gated.** Logs a simulated ad-spend change |
+
+### What TrueForge handles
+
+Model routing across two agents, the MCP connection and progressive tool discovery, streaming, a server-enforced `iteration_limit` (70 for the investigator, 15 for the senior), and the native approval pause and resume. One idempotent script (`npm run setup`) registers the model provider, the MCP server, and both agents through TrueForge's REST API, so the harness config is code.
+
+### Memory
+
+A small in-memory investigation-history layer (`src/investigation-history.mjs`) records the hypotheses tested on each case and their verdicts, so a repeated run does not spend steps re-testing them. The **Reset memory** checkbox clears it for that case before a run. It lives in the backend process and is cleared when the backend restarts.
+
+## Running it locally
+
+Requires Node.js 22 (what the Docker image uses) and an OpenAI API key.
 
 ```bash
 npm install
-cp .env.example .env   # fill in OPENAI_API_KEY
 ```
 
-If `.env.example` isn't present (some sandboxes block writing `.env*`
-files), create `.env` yourself with:
+Create a `.env` file in the project root:
 
 ```
 OPENAI_API_KEY=sk-...
 ```
 
-Then, in three terminals:
+Then, in separate terminals:
 
 ```bash
 npx @truefoundry/trueforge@latest   # the harness itself, on :8790
 npm run mcp                         # evidence MCP server, on :8793
-npm run setup                       # registers model providers, MCP server, and both agents
+npm run setup                       # registers the provider, MCP server, and both agents
 npm run backend                     # dashboard + SSE API, on :8788
 ```
 
-Open http://localhost:8788 and click **Start Investigation**.
+`npm run dev` starts the MCP server and the backend together.
+
+Open http://localhost:8788, pick a case, and click **Start Investigation**. A full run takes a few minutes: the investigator works through several hypotheses, then the senior reviews the trail. When the approval banner appears, approve or deny the fix.
+
+Re-run `npm run setup` whenever you change an agent's instructions or model in `src/setup-trueforge.mjs`.
+
+The page loads D3, Phosphor icons, canvas-confetti, and Google Fonts from CDNs, so the UI needs an internet connection.
+
+### Configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OPENAI_API_KEY` | (required) | Registered with TrueForge by `npm run setup` |
+| `PORT` | `8788` | Backend port |
+| `MCP_PORT` | `8793` | Evidence MCP server port |
+| `TRUEFORGE_URL` | `http://localhost:8790` | Where TrueForge is running |
+| `DETECTIVE_MCP_URL` | `http://localhost:8793/mcp` | MCP URL that TrueForge is told to call |
+| `DETECTIVE_INVESTIGATOR_AGENT_NAME` | `detective-investigator` | Agent name the backend starts sessions with |
+| `DETECTIVE_SENIOR_AGENT_NAME` | `detective-senior` | Agent name for the senior session |
+
+### Backend API
+
+| Route | Purpose |
+|---|---|
+| `GET /api/cases` | The case list, with a headline computed from each case's own data |
+| `POST /api/investigate` | Body `{ caseId, resetMemory }`. Streams SSE: `session`, `activity`, `board_event`, `delta`, `summary`, `error`, `done` |
+| `POST /api/investigate/approval` | Body `{ caseId, decision: "allow" \| "deny" }`. Resumes the paused turn and streams the rest |
+| `GET /api/investigate/:caseId/snapshot` | The case's board events so far (in memory) |
+| `GET /api/health` | Health check |
+
+An unknown or missing `caseId` returns a 400.
+
+## Deploying
+
+The `Dockerfile` and `render.yaml` run TrueForge, the MCP server, and the backend together in one container. TrueForge and the MCP server bind to localhost only, and only the backend's `$PORT` is exposed. Set `OPENAI_API_KEY` in the host's environment.
+
+This is a temporary demo deploy, not a hardened production one: TrueForge's standalone mode has no built-in auth, so take the deployment down when the demo window is over.
 
 ## Tests
 
@@ -86,8 +145,44 @@ Open http://localhost:8788 and click **Start Investigation**.
 npm test
 ```
 
-Runs `node --test` over the pure, dependency-free modules (evidence data,
-verdict scoring, board-event translation, investigation history/loop,
-board snapshotting, and the restock action log). The MCP server,
-TrueForge setup script, and backend aren't unit tested directly — they
-need a live TrueForge instance — the same split PharmaFlow uses.
+Runs `node --test` over the pure, dependency-free modules: the evidence data for both cases, verdict scoring, board-event translation (including evidence-source normalization), activity events, tool-call accumulation, investigation history and loop limits, board snapshotting, and the action logs. The MCP server, setup script, and backend need a live TrueForge instance, so they are not unit tested directly.
+
+## Project structure
+
+```
+src/
+  backend.mjs               Express server, SSE relay, approval flow
+  evidence-mcp-server.mjs   MCP tools (evidence + fixes)
+  evidence-store.mjs        Case registry and the synthetic datasets
+  setup-trueforge.mjs       Registers provider, MCP server, and agents
+  board-events.mjs          Stream events to board events
+  activity-events.mjs       Log-only "what is the agent doing" lines
+  tool-call-accumulator.mjs Reassembles streamed tool calls
+  verdict.mjs               Verdict, confidence, edge style, approval outcome
+  investigation-history.mjs Per-case memory
+  investigation-loop.mjs    Board step budget
+  board-store.mjs           In-memory board events per case
+  actions-log.mjs           Simulated restock and ad-spend logs
+web/                        Vanilla JS + D3 UI (no build step)
+test/                       Unit tests
+data/                       Action logs written by approved fixes
+```
+
+## Adding a case
+
+1. Add a case config to the registry in `src/evidence-store.mjs`: an id, title, case date, and how revenue, SKU sales, inventory, marketing, refunds, and weather behave on and before that date.
+2. Add tests for the new case's data in `test/evidence-store.test.mjs`.
+3. If the case needs a new tool (a new evidence source or a new kind of fix), add it in `src/evidence-mcp-server.mjs` and register it in `EVIDENCE_SOURCE_BY_TOOL` in `src/board-events.mjs` (its board label, and the list the board uses to normalize the investigator's evidence source) and `TOOL_LABELS` in `src/activity-events.mjs` (its event-log wording).
+4. If that tool is a fix with a side effect, also list it in `require_approval_for_tools` and in the senior's instructions in `src/setup-trueforge.mjs`, and in `APPROVAL_GATED_TOOLS` in `src/backend.mjs`.
+5. Run `npm run setup` again. The picker and rail pick the case up automatically from `GET /api/cases`.
+
+## Limitations
+
+- **Synthetic data and simulated actions.** No real store, inventory system, or ad platform is connected. Approved fixes write a record marked `simulated`.
+- **In-memory state.** Board events and investigation memory live in the backend process, and each case's saved view lives in the open page. A backend restart or page reload clears them.
+- **LLM output varies between runs.** The evidence is deterministic, but the models are not. An investigator can occasionally add a cause the data does not support, so read the conclusion against the evidence trail on the board.
+- **Single-user demo.** There is no auth, and approvals are keyed by case, so two people running the same case at once would interfere.
+
+## Authors
+
+Ramya Velaga and Sanjay Noolu, at the Agent Harness Hackathon, Santa Clara, Sep 19, 2026.
