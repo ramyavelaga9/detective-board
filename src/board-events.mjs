@@ -18,6 +18,7 @@ const EVIDENCE_SOURCE_BY_TOOL = {
   get_refund_events: "Refunds",
   get_weather: "Weather",
   propose_restock_action: "Action",
+  propose_marketing_action: "Action",
 };
 
 const PREVIEW_LIMIT = 80;

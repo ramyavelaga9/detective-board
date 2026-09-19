@@ -16,11 +16,19 @@ const ICON_BY_EVENT_TYPE = {
   step_limit_reached: "ph-hourglass-high",
 };
 
+// Log-only progress lines streamed as "activity" events (see src/activity-events.mjs).
+const ICON_BY_ACTIVITY_KIND = {
+  thinking: "ph-dots-three-circle",
+  tool_started: "ph-gear-six",
+  tool_finished: "ph-check",
+};
+
 const state = {
-  caseId: "DB-1001",
+  caseId: null,
   nodes: [],
   edges: [],
   selectedNodeId: null,
+  conclusion: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -89,6 +97,8 @@ const simulation = d3
   .force("bounds", keepInBounds);
 
 function resizeBoard() {
+  // The board is display:none while the case picker is showing, so it has no size to measure.
+  if (el("workspace").hidden) return;
   const rect = el("board").parentElement.getBoundingClientRect();
   width = rect.width;
   height = rect.height;
@@ -349,7 +359,26 @@ function addConnectionEdge({ hypothesis, evidenceSource, verdict, confidence, ed
 
 // ---- Case file panel + event log ----
 
+// The newest "thinking" line ticks up its elapsed seconds while the model works, so a
+// slow step (a reasoning model can take 30s+ before its next tool call) reads as
+// "still working" instead of a frozen log. Any newer log line stops it.
+let liveTicker = null;
+
+function stopLiveTicker() {
+  if (liveTicker) clearInterval(liveTicker);
+  liveTicker = null;
+}
+
+function startLiveTicker(span, baseText) {
+  const startedAt = Date.now();
+  liveTicker = setInterval(() => {
+    const seconds = Math.floor((Date.now() - startedAt) / 1000);
+    if (seconds >= 3) span.textContent = `${baseText} ${seconds}s`;
+  }, 1000);
+}
+
 function logEvent(iconClass, text, extraClass = "") {
+  stopLiveTicker();
   const li = document.createElement("li");
   if (extraClass) li.className = extraClass;
   const icon = document.createElement("i");
@@ -358,6 +387,7 @@ function logEvent(iconClass, text, extraClass = "") {
   span.textContent = text;
   li.append(icon, span);
   el("event-log").prepend(li);
+  return li;
 }
 
 function describeEventForLog(event) {
@@ -382,6 +412,7 @@ function describeEventForLog(event) {
 }
 
 function renderConclusion(event) {
+  state.conclusion = event;
   const box = el("conclusion");
   box.classList.remove("empty");
   box.innerHTML =
@@ -409,11 +440,72 @@ function handleBoardEvent(event) {
   else if (event.type === "node_result") setNodeResult(event.id, event.summary);
   else if (event.type === "edge_added") addConnectionEdge(event);
   else if (event.type === "conclusion") renderConclusion(event);
-  else if (event.type === "approval_required") showApproval(event);
-  else if (event.type === "approval_resolved") hideApprovalWithOutcome(event);
+  else if (event.type === "approval_required") {
+    showApproval(event);
+    setCaseStatus(state.caseId, "awaiting");
+  } else if (event.type === "approval_resolved") hideApprovalWithOutcome(event);
+}
+
+function handleActivity(activity) {
+  const li = logEvent(ICON_BY_ACTIVITY_KIND[activity.kind] ?? "ph-info", activity.text, "activity");
+  if (activity.kind === "thinking") startLiveTicker(li.querySelector("span"), activity.text);
+}
+
+// ---- Case closed: senior summary, stamp, confetti ----
+
+const prefersReducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function fireConfetti() {
+  if (!window.confetti || prefersReducedMotion()) return;
+  const colors = ["#c23b3b", "#c2953b", "#f2e9d8", "#7d7368"];
+  window.confetti({ particleCount: 150, spread: 95, startVelocity: 45, origin: { x: 0.5, y: 0.55 }, colors });
+  const end = Date.now() + 2200;
+  (function sideCannons() {
+    window.confetti({ particleCount: 4, angle: 60, spread: 60, origin: { x: 0, y: 0.7 }, colors });
+    window.confetti({ particleCount: 4, angle: 120, spread: 60, origin: { x: 1, y: 0.7 }, colors });
+    if (Date.now() < end) requestAnimationFrame(sideCannons);
+  })();
+}
+
+function fallbackSummary(fixOutcome) {
+  const c = state.conclusion;
+  if (!c) return "The senior detective has closed the case.";
+  const fix =
+    fixOutcome === "denied" ? "The proposed fix was declined." : fixOutcome === "approved" ? "The fix was approved." : "";
+  return `${c.rootCause}. Recommended action: ${c.recommendedAction}. ${fix}`.trim();
+}
+
+function stampCase(fixOutcome) {
+  const solved = fixOutcome !== "denied";
+  const stamp = el("case-stamp");
+  el("case-stamp-title").textContent = solved ? "Case Solved" : "Case Closed";
+  el("case-stamp-sub").textContent = solved ? `Case ${state.caseId}` : "Fix declined";
+  stamp.classList.toggle("declined", !solved);
+  // Re-adding the element's animation on a rerun needs a reflow between hide and show.
+  stamp.classList.add("hidden");
+  void stamp.offsetWidth;
+  stamp.classList.remove("hidden");
+  if (solved) setTimeout(fireConfetti, 350);
+}
+
+function handleSummary({ text, fixOutcome }) {
+  el("summary-text").textContent = text || fallbackSummary(fixOutcome);
+  el("summary").classList.remove("hidden");
+  logEvent("ph-file-text", "Senior detective's summary is ready");
+  logEvent("ph-check-circle", fixOutcome === "denied" ? "Case closed - fix declined" : "Case solved");
+  setCaseStatus(state.caseId, fixOutcome === "denied" ? "closed" : "solved");
+  stampCase(fixOutcome);
+}
+
+function resetCaseClosure() {
+  el("summary").classList.add("hidden");
+  el("case-stamp").classList.add("hidden");
+  window.confetti?.reset?.();
 }
 
 async function respondToApproval(decision) {
+  setBusy(true);
+  setCaseStatus(state.caseId, "investigating");
   el("approve-btn").disabled = true;
   el("deny-btn").disabled = true;
   try {
@@ -422,17 +514,28 @@ async function respondToApproval(decision) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ caseId: state.caseId, decision }),
     });
-    await consumeSSE(res, { board_event: handleBoardEvent, error: (data) => logEvent("ph-warning", `Error: ${data.message}`) });
+    await consumeSSE(res, {
+      activity: handleActivity,
+      board_event: handleBoardEvent,
+      summary: handleSummary,
+      done: stopLiveTicker,
+      error: (data) => logEvent("ph-warning", `Error: ${data.message}`),
+    });
   } catch (err) {
     logEvent("ph-warning", `Error: ${err.message}`);
   } finally {
+    stopLiveTicker();
     el("approve-btn").disabled = false;
     el("deny-btn").disabled = false;
+    settleCaseStatus();
+    setBusy(false);
   }
 }
 
 async function startInvestigation() {
   el("start-btn").disabled = true;
+  setBusy(true);
+  setCaseStatus(state.caseId, "investigating");
   state.nodes = [];
   state.edges = [];
   state.selectedNodeId = null;
@@ -443,30 +546,275 @@ async function startInvestigation() {
   el("event-log").innerHTML = "";
   el("approval").classList.add("hidden");
   updateBoardReadout();
+  stopLiveTicker();
+  state.conclusion = null;
+  resetCaseClosure();
 
   try {
     const res = await fetch("/api/investigate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ resetMemory: el("reset-memory").checked }),
+      body: JSON.stringify({ caseId: state.caseId, resetMemory: el("reset-memory").checked }),
     });
     await consumeSSE(res, {
       session: (data) => logEvent("ph-play", `Session started (${data.role ?? "investigator"})`),
+      activity: handleActivity,
       board_event: handleBoardEvent,
+      summary: handleSummary,
+      done: stopLiveTicker,
       error: (data) => logEvent("ph-warning", `Error: ${data.message}`),
     });
   } catch (err) {
     logEvent("ph-warning", `Error: ${err.message}`);
   } finally {
+    stopLiveTicker();
     el("start-btn").disabled = false;
+    settleCaseStatus();
+    setBusy(false);
+  }
+}
+
+// ---- Cases: picker, per-case saved views, and the case rail ----
+
+const STATUS_LABEL = {
+  open: "Not started",
+  investigating: "Investigating",
+  awaiting: "Awaiting approval",
+  solved: "Solved",
+  closed: "Closed",
+};
+
+const STATUS_ICON = {
+  open: "ph-folder-open",
+  investigating: "ph-magnifying-glass",
+  awaiting: "ph-warning-circle",
+  solved: "ph-check-circle",
+  closed: "ph-x-circle",
+};
+
+const EMPTY_CONCLUSION_HTML = `<i class="ph ph-lightbulb-filament"></i><div>No conclusion yet. Start the investigation to build the case.</div>`;
+
+let cases = []; // [{ id, title, date, headline }] from /api/cases
+let busy = false; // true while an investigation or an approval is streaming
+const caseViews = new Map(); // caseId -> that case's saved board, log, and case-file panel
+
+/** Each case keeps its own board, event log, conclusion, summary, and stamp, so switching cases never loses work. */
+function viewFor(caseId) {
+  if (!caseViews.has(caseId)) {
+    caseViews.set(caseId, {
+      status: "open",
+      nodes: [],
+      edges: [],
+      conclusion: null,
+      conclusionClass: "conclusion empty",
+      conclusionHtml: EMPTY_CONCLUSION_HTML,
+      logHtml: "",
+      summary: { visible: false, text: "" },
+      stamp: { visible: false, title: "", sub: "", declined: false },
+      approval: { visible: false, text: "" },
+    });
+  }
+  return caseViews.get(caseId);
+}
+
+function saveView() {
+  if (!state.caseId) return;
+  const v = viewFor(state.caseId);
+  v.nodes = state.nodes;
+  v.edges = state.edges;
+  v.conclusion = state.conclusion;
+  v.conclusionClass = el("conclusion").className;
+  v.conclusionHtml = el("conclusion").innerHTML;
+  v.logHtml = el("event-log").innerHTML;
+  v.summary = { visible: !el("summary").classList.contains("hidden"), text: el("summary-text").textContent };
+  v.stamp = {
+    visible: !el("case-stamp").classList.contains("hidden"),
+    title: el("case-stamp-title").textContent,
+    sub: el("case-stamp-sub").textContent,
+    declined: el("case-stamp").classList.contains("declined"),
+  };
+  v.approval = { visible: !el("approval").classList.contains("hidden"), text: el("approval-text").textContent };
+}
+
+function loadView(caseId) {
+  const v = viewFor(caseId);
+  state.nodes = v.nodes;
+  state.edges = v.edges;
+  state.conclusion = v.conclusion;
+  state.selectedNodeId = null;
+  ensureCaseNode();
+  // The board only has a measurable size once the workspace is visible. Measuring here also
+  // re-pins the case node and re-lays-out every card in its slot, so a restored view that dates
+  // from a different window size still fits.
+  resizeBoard();
+  updateBoardReadout();
+
+  el("conclusion").className = v.conclusionClass;
+  el("conclusion").innerHTML = v.conclusionHtml;
+  el("event-log").innerHTML = v.logHtml;
+  el("summary-text").textContent = v.summary.text;
+  el("summary").classList.toggle("hidden", !v.summary.visible);
+  el("case-stamp-title").textContent = v.stamp.title;
+  el("case-stamp-sub").textContent = v.stamp.sub;
+  el("case-stamp").classList.toggle("declined", v.stamp.declined);
+  el("case-stamp").classList.toggle("hidden", !v.stamp.visible);
+  el("approval-text").textContent = v.approval.text;
+  el("approval").classList.toggle("hidden", !v.approval.visible);
+}
+
+function setCaseStatus(caseId, status) {
+  viewFor(caseId).status = status;
+  renderRail();
+  renderCards();
+}
+
+/** A run that ends without a verdict or a pending approval (an error, the step limit) leaves nothing in progress. */
+function settleCaseStatus() {
+  const v = viewFor(state.caseId);
+  if (v.status === "investigating") setCaseStatus(state.caseId, "open");
+}
+
+function setBusy(value) {
+  busy = value;
+  renderRail();
+}
+
+function statusBadge(className, status) {
+  const badge = document.createElement("span");
+  badge.className = className;
+  badge.dataset.status = status;
+  const icon = document.createElement("i");
+  icon.className = `ph ${STATUS_ICON[status]}`;
+  badge.append(icon, document.createTextNode(STATUS_LABEL[status]));
+  return badge;
+}
+
+let cardsHaveAnimated = false;
+
+function renderCards() {
+  const grid = el("case-grid");
+  grid.replaceChildren();
+  if (!cases.length) {
+    const empty = document.createElement("li");
+    empty.className = "picker-sub";
+    empty.textContent = "No cases are available yet.";
+    grid.append(empty);
+    return;
+  }
+  cases.forEach((c, i) => {
+    const li = document.createElement("li");
+    li.style.setProperty("--i", i);
+    const button = document.createElement("button");
+    button.className = "case-card";
+    button.type = "button";
+    button.dataset.caseId = c.id;
+    button.setAttribute("aria-label", `Open case ${c.id}, ${c.title}`);
+
+    const pin = document.createElement("span");
+    pin.className = "case-card-pin";
+    const number = document.createElement("span");
+    number.className = "case-card-number";
+    number.textContent = c.id;
+    const title = document.createElement("span");
+    title.className = "case-card-title";
+    title.textContent = c.title;
+    const headline = document.createElement("span");
+    headline.className = "case-card-headline";
+    headline.textContent = c.headline;
+
+    const foot = document.createElement("span");
+    foot.className = "case-card-foot";
+    const date = document.createElement("span");
+    date.className = "case-card-date";
+    date.textContent = c.date;
+    const arrow = document.createElement("i");
+    arrow.className = "ph ph-arrow-right case-card-open";
+    foot.append(date, statusBadge("case-card-status", viewFor(c.id).status), arrow);
+
+    button.append(pin, number, title, headline, foot);
+    button.addEventListener("click", () => openCase(c.id));
+    li.append(button);
+    grid.append(li);
+  });
+  // Entrance animation only on the first render; later renders (a status change) must not replay it.
+  if (!cardsHaveAnimated) {
+    cardsHaveAnimated = true;
+    grid.classList.add("case-card-anim");
+    setTimeout(() => grid.classList.remove("case-card-anim"), 1200);
+  }
+}
+
+function renderRail() {
+  const list = el("rail-list");
+  list.replaceChildren();
+  for (const c of cases) {
+    const isActive = c.id === state.caseId;
+    const locked = busy && !isActive;
+    const li = document.createElement("li");
+    const button = document.createElement("button");
+    button.className = "rail-item";
+    button.type = "button";
+    button.setAttribute("aria-current", String(isActive));
+    if (locked) {
+      button.setAttribute("aria-disabled", "true");
+      button.title = "Finish the current investigation first";
+    }
+    const number = document.createElement("span");
+    number.className = "rail-number";
+    number.textContent = c.id;
+    button.append(number, statusBadge("rail-status", viewFor(c.id).status));
+    button.addEventListener("click", () => {
+      if (!locked && !isActive) openCase(c.id);
+    });
+    li.append(button);
+    list.append(li);
+  }
+  el("all-cases-btn").disabled = busy;
+}
+
+function openCase(caseId) {
+  if (busy) return;
+  if (state.caseId && state.caseId !== caseId) saveView();
+  state.caseId = caseId;
+  document.body.dataset.view = "workspace";
+  el("picker").hidden = true;
+  el("workspace").hidden = false;
+  el("topbar-case-label").textContent = `Case ${caseId}`;
+  stopLiveTicker();
+  window.confetti?.reset?.();
+  loadView(caseId);
+  renderRail();
+}
+
+function showPicker() {
+  if (busy) return;
+  saveView();
+  document.body.dataset.view = "picker";
+  el("workspace").hidden = true;
+  el("picker").hidden = false;
+  renderCards();
+}
+
+async function loadCases() {
+  el("picker-error").hidden = true;
+  try {
+    const res = await fetch("/api/cases");
+    if (!res.ok) throw new Error(`The server answered ${res.status}`);
+    cases = (await res.json()).cases ?? [];
+    renderCards();
+  } catch (err) {
+    el("case-grid").replaceChildren();
+    el("picker-error-text").textContent = `Could not load the cases. ${err.message}.`;
+    el("picker-error").hidden = false;
   }
 }
 
 window.addEventListener("resize", resizeBoard);
-resizeBoard();
-ensureCaseNode();
-restartSimulation();
 updateBoardReadout();
+
+el("picker-retry-btn").addEventListener("click", loadCases);
+el("all-cases-btn").addEventListener("click", showPicker);
+loadCases();
 
 el("start-btn").addEventListener("click", startInvestigation);
 el("approve-btn").addEventListener("click", () => respondToApproval("allow"));

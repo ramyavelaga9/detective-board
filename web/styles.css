@@ -25,6 +25,7 @@ body {
   background: var(--panel);
   color: var(--ink);
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -453,6 +454,12 @@ button:disabled {
   flex-shrink: 0;
 }
 
+/* Live progress lines ("Calling get_weather...") sit back visually so the board-changing entries stand out. */
+.event-log li.activity {
+  font-style: italic;
+  opacity: 0.75;
+}
+
 .event-log li.verdict-confirmed i {
   color: var(--red);
 }
@@ -491,4 +498,525 @@ button:disabled {
     gap: 10px;
   }
 
+}
+
+/* ---- Senior detective's summary card ---- */
+
+.summary {
+  background: var(--panel-raised);
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--red);
+  border-radius: 8px;
+  padding: 14px;
+  margin-bottom: 18px;
+}
+
+.summary.hidden {
+  display: none;
+}
+
+.summary p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-line;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .summary:not(.hidden) {
+    animation: string-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  }
+}
+
+/* ---- "Case solved" rubber stamp ---- */
+
+.case-stamp {
+  position: absolute;
+  top: 24%;
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 28px 12px;
+  border: 5px double var(--red);
+  border-radius: 10px;
+  color: var(--red);
+  background: rgba(20, 10, 8, 0.35);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(-50%, -50%) rotate(-9deg);
+  opacity: 0.92;
+  text-shadow: 0 0 1px currentColor;
+}
+
+.case-stamp span {
+  font-size: clamp(30px, 6vw, 68px);
+  line-height: 1.05;
+}
+
+.case-stamp small {
+  font-size: clamp(11px, 1.4vw, 15px);
+  letter-spacing: 0.3em;
+}
+
+.case-stamp.declined {
+  color: var(--amber);
+  border-color: var(--amber);
+}
+
+.case-stamp.hidden {
+  display: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .case-stamp:not(.hidden) {
+    animation: stamp-slam 0.55s cubic-bezier(0.2, 0.9, 0.3, 1) backwards;
+  }
+}
+
+@keyframes stamp-slam {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(-9deg) scale(2.8);
+  }
+  55% {
+    opacity: 0.92;
+    transform: translate(-50%, -50%) rotate(-9deg) scale(0.92);
+  }
+  75% {
+    transform: translate(-50%, -50%) rotate(-9deg) scale(1.04);
+  }
+  100% {
+    transform: translate(-50%, -50%) rotate(-9deg) scale(1);
+  }
+}
+
+/* ---- Views: case picker first, then the workspace with the case rail ---- */
+
+[hidden] {
+  display: none !important;
+}
+
+/* The topbar's case label and the investigation controls only mean something once a case is open. */
+body[data-view="picker"] .case-id,
+body[data-view="picker"] .controls {
+  display: none;
+}
+
+/* ---- Case picker ---- */
+
+.picker {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background-image:
+    radial-gradient(circle, rgba(0, 0, 0, 0.22) 1px, transparent 1.4px),
+    radial-gradient(ellipse at 50% 0%, var(--cork) 0%, var(--cork-shadow) 100%);
+  background-size: 14px 14px, 100% 100%;
+  box-shadow: inset 0 0 140px rgba(0, 0, 0, 0.55);
+}
+
+.picker-inner {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: clamp(40px, 10vh, 104px) 24px 72px;
+}
+
+.picker-title {
+  margin: 0 0 10px;
+  font-family: var(--font-display);
+  font-size: clamp(30px, 4.2vw, 44px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+}
+
+.picker-sub {
+  margin: 0 0 40px;
+  max-width: 52ch;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--ink-dim);
+}
+
+.case-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 28px;
+}
+
+/* A pinned-file offset: every second case sits a little lower, so the row reads as hung by hand, not ruled. */
+@media (min-width: 769px) {
+  .case-grid > li:nth-child(even) {
+    margin-top: 28px;
+  }
+}
+
+.case-grid > li {
+  --tilt: -0.6deg;
+  rotate: var(--tilt);
+  transition: rotate 0.25s cubic-bezier(0.16, 1, 0.3, 1), translate 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.case-grid > li:nth-child(even) {
+  --tilt: 0.5deg;
+}
+
+.case-grid > li:hover,
+.case-grid > li:focus-within {
+  rotate: 0deg;
+  translate: 0 -4px;
+}
+
+.case-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  width: 100%;
+  min-height: 260px;
+  padding: 30px 28px 22px 32px;
+  text-align: left;
+  white-space: normal;
+  background: var(--panel-raised);
+  color: var(--ink);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  font-weight: 400;
+  /* Shadow tinted to the cork behind it, not pure black. */
+  box-shadow: 0 18px 40px rgba(24, 14, 6, 0.55);
+}
+
+.case-card:hover {
+  filter: none;
+  background: #30271f;
+}
+
+.case-card:active {
+  transform: scale(0.985);
+  box-shadow: 0 10px 24px rgba(24, 14, 6, 0.55);
+}
+
+.case-card:focus-visible,
+.rail-item:focus-visible,
+.rail-back:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
+}
+
+.case-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  border-radius: 8px 0 0 8px;
+  background: var(--red);
+}
+
+.case-card-pin {
+  position: absolute;
+  top: -5px;
+  left: 50%;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.case-card-number {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  letter-spacing: 0.08em;
+}
+
+.case-card-title {
+  font-family: var(--font-display);
+  font-size: 29px;
+  font-weight: 600;
+  line-height: 1.12;
+  letter-spacing: -0.015em;
+}
+
+.case-card-headline {
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--ink-dim);
+}
+
+.case-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline);
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+
+.case-card-date {
+  font-family: var(--font-mono);
+}
+
+.case-card-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.case-card-status[data-status="solved"] i,
+.rail-status[data-status="solved"] i {
+  color: var(--red);
+}
+
+.case-card-status[data-status="closed"] i,
+.rail-status[data-status="closed"] i {
+  color: var(--amber);
+}
+
+.case-card-open {
+  margin-left: auto;
+  font-size: 18px;
+  color: var(--ink);
+  transition: translate 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.case-card:hover .case-card-open {
+  translate: 4px 0;
+}
+
+/* Loading: placeholders shaped like the finished cards, so nothing jumps when they arrive. */
+.case-skeleton {
+  min-height: 260px;
+  border-radius: 8px;
+  border: 1px solid var(--hairline);
+  background: linear-gradient(100deg, rgba(42, 34, 27, 0.9) 30%, rgba(58, 47, 38, 0.9) 50%, rgba(42, 34, 27, 0.9) 70%);
+  background-size: 200% 100%;
+}
+
+.picker-error {
+  max-width: 520px;
+  padding: 18px 20px;
+  background: #3a1f1f;
+  border: 1px solid var(--red-deep);
+  border-radius: 8px;
+}
+
+.picker-error p {
+  margin: 0 0 12px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .case-card-anim > li {
+    animation: case-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+    animation-delay: calc(var(--i, 0) * 90ms);
+  }
+
+  .case-skeleton {
+    animation: shimmer 1.6s linear infinite;
+  }
+
+  .case-rail {
+    animation: rail-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+  }
+}
+
+@keyframes case-in {
+  from {
+    opacity: 0;
+    translate: 0 18px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* ---- Case rail: a slim vertical list of cases beside the board ---- */
+
+.case-rail {
+  width: 168px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 12px;
+  background: linear-gradient(180deg, #1f1813, #17120d);
+  border-right: 1px solid var(--hairline);
+  overflow-y: auto;
+}
+
+.case-rail h2 {
+  margin: 0 0 4px 8px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+}
+
+.rail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rail-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  width: 100%;
+  padding: 10px 10px 10px 14px;
+  text-align: left;
+  background: transparent;
+  color: var(--ink-dim);
+  border-radius: 6px;
+  font-weight: 400;
+  box-shadow: none;
+}
+
+.rail-item:hover {
+  filter: none;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.rail-item:active {
+  transform: scale(0.98);
+  box-shadow: none;
+}
+
+.rail-item[aria-current="true"] {
+  background: var(--panel-raised);
+  color: var(--ink);
+}
+
+.rail-item[aria-current="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--red);
+}
+
+.rail-item[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.rail-number {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+}
+
+.rail-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+}
+
+.rail-back {
+  margin-top: auto;
+  justify-content: center;
+  padding: 9px 10px;
+  background: transparent;
+  color: var(--ink-dim);
+  border: 1px solid var(--hairline);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: none;
+}
+
+.rail-back:hover {
+  background: rgba(255, 255, 255, 0.05);
+  filter: none;
+}
+
+.rail-back:disabled {
+  opacity: 0.45;
+}
+
+@keyframes rail-in {
+  from {
+    opacity: 0;
+    translate: -12px 0;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+
+/* Mobile (< 768px): the rail becomes a horizontal strip above the board instead of a left column. */
+@media (max-width: 768px) {
+  .picker {
+    overflow: visible;
+  }
+
+  .picker-inner {
+    padding: 36px 16px 48px;
+  }
+
+  .case-rail {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-right: none;
+    border-bottom: 1px solid var(--hairline);
+    overflow-x: auto;
+  }
+
+  .case-rail h2 {
+    display: none;
+  }
+
+  .rail-list {
+    flex-direction: row;
+  }
+
+  .rail-item {
+    width: auto;
+    white-space: nowrap;
+  }
+
+  .rail-back {
+    margin-top: 0;
+    margin-left: auto;
+  }
 }

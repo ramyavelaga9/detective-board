@@ -7,6 +7,11 @@ test("describeEvidenceSource maps known evidence tools to a board label", () => 
   assert.equal(describeEvidenceSource("get_weather"), "Weather");
 });
 
+test("describeEvidenceSource labels both fix actions as 'Action' on the board", () => {
+  assert.equal(describeEvidenceSource("propose_restock_action"), "Action");
+  assert.equal(describeEvidenceSource("propose_marketing_action"), "Action");
+});
+
 test("describeEvidenceSource falls back to 'Unknown' for an unrecognized tool (invalid input case)", () => {
   assert.equal(describeEvidenceSource("delete_everything"), "Unknown");
 });

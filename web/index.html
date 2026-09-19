@@ -15,7 +15,7 @@
     <link rel="stylesheet" href="styles.css" />
     <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
   </head>
-  <body>
+  <body data-view="picker">
     <div class="grain" aria-hidden="true"></div>
 
     <header class="topbar">
@@ -23,7 +23,7 @@
         <i class="ph-fill ph-push-pin brand-pin" aria-hidden="true"></i>
         <div class="brand-text">
           <h1>Detective Board</h1>
-          <span class="case-id"><i class="ph ph-file-text"></i> Case DB-1001</span>
+          <span class="case-id" id="topbar-case-id"><i class="ph ph-file-text"></i> <span id="topbar-case-label"></span></span>
         </div>
       </div>
       <div class="controls">
@@ -35,17 +35,46 @@
       </div>
     </header>
 
-    <main class="layout">
+    <main id="picker" class="picker" aria-labelledby="picker-title">
+      <div class="picker-inner">
+        <h2 id="picker-title" class="picker-title">Open a case</h2>
+        <p class="picker-sub">Each case has its own evidence, board and verdict. Pick one to start investigating.</p>
+        <ul id="case-grid" class="case-grid" aria-live="polite">
+          <li class="case-skeleton" aria-hidden="true"></li>
+          <li class="case-skeleton" aria-hidden="true"></li>
+        </ul>
+        <div id="picker-error" class="picker-error" role="alert" hidden>
+          <p id="picker-error-text"></p>
+          <button id="picker-retry-btn"><i class="ph ph-arrow-counter-clockwise"></i> Try again</button>
+        </div>
+      </div>
+    </main>
+
+    <main id="workspace" class="layout" hidden>
+      <nav id="case-rail" class="case-rail" aria-label="Cases">
+        <h2>Cases</h2>
+        <ul id="rail-list" class="rail-list"></ul>
+        <button id="all-cases-btn" class="rail-back"><i class="ph ph-squares-four"></i> All cases</button>
+      </nav>
+
       <section class="board-panel">
         <svg id="board" width="100%" height="100%"></svg>
         <p class="board-hint"><i class="ph ph-hand-grabbing"></i> Drag to arrange · Click a card to inspect</p>
         <div id="board-readout" class="board-readout" aria-live="polite">Case board ready <span>Awaiting evidence</span></div>
+        <div id="case-stamp" class="case-stamp hidden" role="status">
+          <span id="case-stamp-title">Case Solved</span>
+          <small id="case-stamp-sub">Case DB-1001</small>
+        </div>
       </section>
 
       <aside class="case-file">
         <h2><i class="ph ph-folder-open"></i> Case File</h2>
         <div id="conclusion" class="conclusion empty">
           <i class="ph ph-lightbulb-filament"></i> No conclusion yet. Start the investigation to build the case.
+        </div>
+        <div id="summary" class="summary hidden">
+          <h3><i class="ph ph-file-text"></i> Senior Detective's Summary</h3>
+          <p id="summary-text"></p>
         </div>
         <div id="approval" class="approval hidden">
           <p id="approval-text"></p>
@@ -59,6 +88,7 @@
       </aside>
     </main>
 
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

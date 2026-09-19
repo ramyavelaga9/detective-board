@@ -9,10 +9,9 @@
 // Prereqs:
 //   1. TrueForge running locally: `npx @truefoundry/trueforge@latest`
 //   2. Detective Board's MCP server running: `npm run mcp`
-//   3. OPENAI_API_KEY and GEMINI_API_KEY set in .env (placeholder keys
-//      still let you register everything and wire it up — the agents just
-//      won't answer for real until you swap in working keys and re-run
-//      this script)
+//   3. OPENAI_API_KEY set in .env (a placeholder key still lets you
+//      register everything and wire it up — the agents just won't answer
+//      for real until you swap in a working key and re-run this script)
 //
 // Safe to re-run: existing resources are updated in place rather than
 // duplicated.
@@ -22,10 +21,9 @@ import "dotenv/config";
 const BASE_URL = process.env.TRUEFORGE_URL || "http://localhost:8790";
 const MCP_URL = process.env.DETECTIVE_MCP_URL || "http://localhost:8793/mcp";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "sk-placeholder-replace-me";
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "gemini-placeholder-replace-me";
 
 const INVESTIGATOR_MODEL_NAME = "openai/gpt-5-mini";
-const SENIOR_MODEL_NAME = "google-gemini/gemini-flash-latest";
+const SENIOR_MODEL_NAME = "openai/gpt-5";
 const INVESTIGATOR_AGENT_NAME = "detective-investigator";
 const SENIOR_AGENT_NAME = "detective-senior";
 const MCP_SERVER_NAME = "detective-evidence";
@@ -33,7 +31,9 @@ const MCP_SERVER_NAME = "detective-evidence";
 // Named explicitly rather than relying on "@write"/"@destructive" default
 // categories, so approval-gating doesn't depend on annotation heuristics
 // working out — the same choice PharmaFlow's setup script makes.
-const AGENT_MCP_SERVERS = [{ name: MCP_SERVER_NAME, require_approval_for_tools: ["propose_restock_action"] }];
+const AGENT_MCP_SERVERS = [
+  { name: MCP_SERVER_NAME, require_approval_for_tools: ["propose_restock_action", "propose_marketing_action"] },
+];
 
 const INVESTIGATOR_INSTRUCTIONS = `You are the investigator on Detective Board, looking into a real revenue
 drop on the case date. Your job is to gather evidence, not to guess.
@@ -45,10 +45,13 @@ score (0-100) before moving to your next hypothesis. Never call
 record_hypothesis_verdict without a preceding evidence tool call to back it.
 
 Only call conclude_investigation once, after you've tested every plausible
-hypothesis evidence lets you test — inventory/stockouts, marketing spend,
-refunds, and weather are all worth checking. Never call
-propose_restock_action yourself; that belongs to the senior detective who
-reviews your findings.
+hypothesis evidence lets you test — inventory/stockouts, marketing spend and
+traffic, refunds, and weather are all worth checking. Never call
+propose_restock_action or propose_marketing_action yourself; those belong to
+the senior detective who reviews your findings.
+
+Every evidence tool takes a caseId: always pass the case id given in the
+case brief, exactly as written.
 
 You are running fully autonomously - no human is available to answer
 questions or approve next steps mid-investigation. Never end a turn by
@@ -61,15 +64,34 @@ investigation's evidence trail — the hypotheses tested, their verdicts, and
 their confidence scores — and your job is to synthesize it into a final
 call, not to re-gather evidence yourself.
 
-Rank the candidate root causes by the evidence you were given, and if a
-stockout is the best-supported cause, call propose_restock_action with a
-concrete SKU and quantity. This requires human approval before it runs —
-never treat it as routine, and never call it for a cause the evidence
-doesn't actually support.
+Weigh the candidate root causes against the evidence you were given (do
+not write the ranking out). If a stockout is the best-supported cause, call
+propose_restock_action with a concrete SKU and quantity. If a cut in ad
+spend and the traffic drop that followed is the best-supported cause, call
+propose_marketing_action with the daily ad spend to restore. Always pass the
+case id from the briefing. Either action requires human approval before it
+runs - never treat it as routine, and never call one for a cause the
+evidence doesn't actually support.
 
 You are running fully autonomously - no human is available to answer
 questions mid-turn. Never end your turn by asking the user a question;
-act on the evidence you were given.`;
+act on the evidence you were given.
+
+How to read the outcome: if the action tool returns a record, a human approved
+the fix and it has been logged (as a simulated action: no real order or ad
+change was placed, so do not call it pending). If the result says the user
+denied the call, the fix was declined. If you never called an action tool, no
+fix was needed.
+
+Once the outcome is known - the fix was approved, was denied, or you decided
+none was needed - reply with one final message and nothing else. That message
+is shown word for word to a business owner who has not followed the
+investigation, so it must be ONLY a short summary: 3 to 5 sentences of plain,
+friendly prose covering what went wrong, how the evidence shows it, what fix
+you proposed and whether it was approved, and what happens next. Do not
+include a ranked list, a recap of your steps, a heading, or a label like
+"Summary:". No bullet points, no markdown, and no tool names (SKU codes are
+fine).`;
 
 async function call(method, path, body) {
   const res = await fetch(`${BASE_URL}${path}`, {
@@ -100,33 +122,19 @@ async function upsertViaSettings(endpoint, manifest, label) {
 }
 
 async function upsertModelProviders() {
+  // Both agents run on OpenAI: the fast investigator on gpt-5-mini, the senior
+  // detective on the stronger gpt-5. They share one provider entry (one API key).
   await upsertViaSettings(
     "model-providers",
     {
       type: "openai",
       auth: { api_key: OPENAI_API_KEY },
-      models: [{ model_id: "gpt-5-mini", name: "gpt-5-mini", properties: { context_length: 400000, max_output_tokens: 64000 } }],
-    },
-    "model provider: openai"
-  );
-  await upsertViaSettings(
-    "model-providers",
-    {
-      type: "google-gemini",
-      auth: { api_key: GEMINI_API_KEY },
-      // Every dated "-pro" model gets zero quota on Gemini's free tier (a live run
-      // against gemini-3.1-pro-preview hit a 429 with limit: 0 for the free tier
-      // specifically), and dated flash models deprecate for new API keys within
-      // months (gemini-2.5-pro, then gemini-2.5-flash both 404'd during development
-      // here, each pointing at a newer dated version as the replacement). Using the
-      // "-latest" alias instead of a pinned version avoids re-breaking on the next
-      // deprecation - Google moves the alias forward on their end. If you have billing
-      // enabled on your Google AI Studio project, swap this for a "-pro" model instead.
       models: [
-        { model_id: "gemini-flash-latest", name: "gemini-flash-latest", properties: { context_length: 1000000, max_output_tokens: 65536 } },
+        { model_id: "gpt-5-mini", name: "gpt-5-mini", properties: { context_length: 400000, max_output_tokens: 64000 } },
+        { model_id: "gpt-5", name: "gpt-5", properties: { context_length: 400000, max_output_tokens: 128000 } },
       ],
     },
-    "model provider: google-gemini"
+    "model provider: openai"
   );
 }
 
@@ -139,7 +147,7 @@ async function upsertAgent(name, model, instructions, description, iterationLimi
   const { data: existing } = await call("GET", "/api/v1/agents");
   const found = existing.find((a) => a.name === name);
   const manifest = {
-    // tool_choice: "required" is an OpenAI/Gemini Chat Completions param, not a documented
+    // tool_choice: "required" is an OpenAI Chat Completions param, not a documented
     // TrueForge field — RuntimeConfig's ModelParams schema explicitly forwards unknown keys
     // to the provider as-is. Without it, a real run showed the model narrating every
     // hypothesis/verdict as prose instead of calling record_hypothesis_verdict, and ending
@@ -182,8 +190,8 @@ async function main() {
     15 // only needs to discover + call propose_restock_action once
   );
   console.log("\nDone. Run `npm run backend` and visit http://localhost:8788.");
-  if (OPENAI_API_KEY.startsWith("sk-placeholder") || GEMINI_API_KEY.startsWith("gemini-placeholder")) {
-    console.log("\n⚠ Reminder: set real OPENAI_API_KEY / GEMINI_API_KEY in .env and re-run `npm run setup`.");
+  if (OPENAI_API_KEY.startsWith("sk-placeholder")) {
+    console.log("\n⚠ Reminder: set a real OPENAI_API_KEY in .env and re-run `npm run setup`.");
   }
 }
 

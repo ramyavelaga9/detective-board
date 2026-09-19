@@ -15,20 +15,20 @@ import cors from "cors";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TrueForge } from "@truefoundry/trueforge-sdk";
-import { getRevenueDeviation } from "./evidence-store.mjs";
+import { getRevenueDeviation, hasCase, listCases } from "./evidence-store.mjs";
 import { createBoardStore } from "./board-store.mjs";
 import { createInvestigationHistory } from "./investigation-history.mjs";
 import { toBoardEvent, NODELESS_TOOLS } from "./board-events.mjs";
 import { nextLoopDecision, MAX_INVESTIGATION_STEPS } from "./investigation-loop.mjs";
 import { resolveApprovalOutcome } from "./verdict.mjs";
-import { createToolCallAccumulator, resolveActualToolCall } from "./tool-call-accumulator.mjs";
+import { createToolCallAccumulator, resolveActualToolCall, peekActualToolName } from "./tool-call-accumulator.mjs";
+import { toThinkingActivity, toToolStartedActivity, toToolFinishedActivity } from "./activity-events.mjs";
 
-const APPROVAL_GATED_TOOLS = new Set(["propose_restock_action"]);
+const APPROVAL_GATED_TOOLS = new Set(["propose_restock_action", "propose_marketing_action"]);
 // TrueForge's own progressive tool-discovery calls, not evidence - see the
 // META_TOOLS check in processTurn for why these are excluded from both the
 // step budget and the board.
 const META_TOOLS = new Set(["list_tools", "get_tool_info"]);
-const CASE_ID = "DB-1001";
 const INVESTIGATOR_AGENT_NAME = process.env.DETECTIVE_INVESTIGATOR_AGENT_NAME || "detective-investigator";
 const SENIOR_AGENT_NAME = process.env.DETECTIVE_SENIOR_AGENT_NAME || "detective-senior";
 
@@ -44,7 +44,7 @@ const boardStore = createBoardStore();
 const investigationHistory = createInvestigationHistory();
 
 // caseId -> { toolCallId, threadId, sessionId } for the one paused
-// propose_restock_action call currently awaiting a human decision.
+// fix-action call (restock or ad spend) per case currently awaiting a human decision.
 const pendingApprovals = new Map();
 
 const app = express();
@@ -69,29 +69,60 @@ function isTransientProviderError(message) {
  * an "error" event. Passing `onError` suppresses that so a caller can retry
  * first (see runSeniorTurnWithRetry) instead of alarming the user over a
  * transient failure that a retry might just fix.
+ *
+ * Alongside board events, sends log-only "activity" events (see
+ * activity-events.mjs) so the event log narrates every step live - the turn
+ * starting, each tool call the moment its name streams in (including
+ * TrueForge's own tool discovery, which never reaches the board), and the
+ * model thinking between calls - instead of going quiet until a board event.
+ * `role` ("investigator" | "senior") picks the wording of those lines.
+ *
+ * When a senior turn finishes for good (not paused for approval), the
+ * senior's final message is sent as a "summary" event so the UI can show it
+ * and close the case. `fixOutcome` ("none" | "approved" | "denied") is
+ * passed through so the UI knows how the proposed fix ended.
  */
-async function processTurn(send, sessionId, inputItems, { onConclusion, onError } = {}) {
+async function processTurn(send, caseId, sessionId, inputItems, { role, fixOutcome = "none", onConclusion, onError } = {}) {
   let stepCount = 0;
   let concluded = false;
+  let messageText = "";
 
   function emit(event) {
     if (!event) return;
-    boardStore.addEvent(CASE_ID, event);
+    boardStore.addEvent(caseId, event);
     send("board_event", event);
   }
 
+  const announce = (activity) => send("activity", activity);
+
   try {
+    // Before opening the stream: creating it and waiting on the model's first
+    // tokens is exactly the stretch where the log used to sit silent.
+    announce(toThinkingActivity(role));
     const stream = await trueforge.sessions.createTurnStream(sessionId, { input: inputItems });
     const toolCalls = createToolCallAccumulator();
     const loggedCalls = new Set();
+    const announcedCalls = new Set();
+    const pendingCalls = new Set();
     let stepLimitHit = false;
 
     turnLoop: for await (const event of stream) {
       switch (event.type) {
         case "model.message.delta": {
-          if (event.content) send("delta", { text: event.content });
+          if (event.content) {
+            messageText += event.content;
+            send("delta", { text: event.content });
+          }
           for (const tc of event.toolCalls ?? []) {
             const call = toolCalls.applyDelta(tc);
+            // Announce the step as soon as the tool's name is known, without waiting for
+            // its arguments to finish streaming (which is what the board node below needs).
+            const startedName = peekActualToolName(call);
+            if (startedName && !announcedCalls.has(call)) {
+              announcedCalls.add(call);
+              pendingCalls.add(call);
+              announce(toToolStartedActivity(startedName));
+            }
             if (!call.name || loggedCalls.has(call)) continue;
             const resolved = resolveActualToolCall(call);
             // A call_tool-wrapped invocation needs its args fully streamed before the
@@ -125,7 +156,7 @@ async function processTurn(send, sessionId, inputItems, { onConclusion, onError 
             const boardEvent = toBoardEvent({ type: "tool_call", toolCallId: call.id, toolName: resolved.name, args });
             emit(boardEvent);
             if (boardEvent?.type === "edge_added") {
-              investigationHistory.recordVerdict(CASE_ID, boardEvent.hypothesis, boardEvent.verdict);
+              investigationHistory.recordVerdict(caseId, boardEvent.hypothesis, boardEvent.verdict);
             }
             if (boardEvent?.type === "conclusion") {
               concluded = true;
@@ -135,7 +166,11 @@ async function processTurn(send, sessionId, inputItems, { onConclusion, onError 
           break;
         }
         case "tool.response": {
-          const resolved = resolveActualToolCall(toolCalls.getById(event.toolCallId));
+          const call = toolCalls.getById(event.toolCallId);
+          const resolved = resolveActualToolCall(call);
+          // Evidence/verdict/conclusion tools already show up as board events; only
+          // tool discovery has no other line to show its result arrived.
+          if (resolved && META_TOOLS.has(resolved.name)) announce(toToolFinishedActivity(resolved.name));
           const skipRender = resolved && (META_TOOLS.has(resolved.name) || NODELESS_TOOLS.has(resolved.name));
           if (!skipRender) {
             emit(
@@ -148,13 +183,16 @@ async function processTurn(send, sessionId, inputItems, { onConclusion, onError 
             );
           }
           toolCalls.complete(event.toolCallId);
+          pendingCalls.delete(call);
+          // Nothing else is in flight, so the model is now deciding what to do next.
+          if (pendingCalls.size === 0 && !concluded) announce(toThinkingActivity(role));
           break;
         }
         case "tool.approval_required": {
           for (const tc of event.toolCalls ?? []) {
             const resolved = resolveActualToolCall(toolCalls.getById(tc.id));
             if (!APPROVAL_GATED_TOOLS.has(resolved?.name)) continue;
-            pendingApprovals.set(CASE_ID, { toolCallId: tc.id, threadId: event.threadId, sessionId });
+            pendingApprovals.set(caseId, { toolCallId: tc.id, threadId: event.threadId, sessionId });
             emit(toBoardEvent({ type: "approval_required", toolName: resolved.name, toolCallId: tc.id }));
           }
           break;
@@ -165,6 +203,12 @@ async function processTurn(send, sessionId, inputItems, { onConclusion, onError 
             const message = event.state.message || "The agent hit an error completing that turn.";
             if (onError) onError(new Error(message));
             else send("error", { message });
+          }
+          // A turn that ends waiting on a human approval isn't finished yet - the summary
+          // belongs to the turn that runs after the decision.
+          const awaitingApproval = (event.state?.requiredActions ?? []).length > 0;
+          if (role === "senior" && status === "done" && !awaitingApproval) {
+            send("summary", { text: messageText.trim(), fixOutcome });
           }
           send("done", { status });
           break;
@@ -192,10 +236,11 @@ async function processTurn(send, sessionId, inputItems, { onConclusion, onError 
  * real config/auth failure isn't transient, so it's surfaced immediately
  * instead of silently retried and delayed.
  */
-async function runSeniorTurnWithRetry(send, sessionId, inputItems, maxAttempts = 2) {
+async function runSeniorTurnWithRetry(send, caseId, sessionId, inputItems, maxAttempts = 2) {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let turnError = null;
-    const result = await processTurn(send, sessionId, inputItems, {
+    const result = await processTurn(send, caseId, sessionId, inputItems, {
+      role: "senior",
       onError: (err) => {
         turnError = err;
       },
@@ -209,10 +254,26 @@ async function runSeniorTurnWithRetry(send, sessionId, inputItems, maxAttempts =
   }
 }
 
+// The cases the picker lists: id, title, and a headline computed from the case's own
+// evidence (never a hand-written number), so the card can't drift from the data.
+app.get("/api/cases", (_req, res) => {
+  res.json({
+    cases: listCases().map(({ id, title, date }) => {
+      const { percentChange } = getRevenueDeviation(id);
+      const direction = percentChange < 0 ? "fell" : "rose";
+      return { id, title, date, headline: `Revenue ${direction} ${Math.abs(percentChange)}% against the prior 14-day average` };
+    }),
+  });
+});
+
 app.post("/api/investigate", async (req, res) => {
-  const { resetMemory } = req.body ?? {};
-  boardStore.resetCase(CASE_ID);
-  if (resetMemory) investigationHistory.resetCase(CASE_ID);
+  const { caseId, resetMemory } = req.body ?? {};
+  if (!caseId) return res.status(400).json({ error: "caseId is required" });
+  if (!hasCase(caseId)) {
+    return res.status(400).json({ error: `Unknown case "${caseId}". Choose one of: ${listCases().map((c) => c.id).join(", ")}` });
+  }
+  boardStore.resetCase(caseId);
+  if (resetMemory) investigationHistory.resetCase(caseId);
 
   res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
   const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -223,22 +284,24 @@ app.post("/api/investigate", async (req, res) => {
   // hanging on "Session started..." forever with no response body at all.
   try {
     const { data: session } = await trueforge.sessions.create({ agent: { name: INVESTIGATOR_AGENT_NAME } });
-    send("session", { caseId: CASE_ID, sessionId: session.id, role: "investigator" });
+    send("session", { caseId, sessionId: session.id, role: "investigator" });
 
-    const deviation = getRevenueDeviation();
-    const priorHistory = investigationHistory.getHistory(CASE_ID);
+    const deviation = getRevenueDeviation(caseId);
+    const priorHistory = investigationHistory.getHistory(caseId);
     const memoryNote = priorHistory.length
       ? ` Already tested in a prior run on this case - do not retest: ${priorHistory
           .map((r) => `${r.hypothesis} (${r.verdict})`)
           .join("; ")}.`
       : "";
     const caseBrief =
-      `Case ${CASE_ID}: revenue on ${deviation.date} was $${deviation.latestRevenue}, ` +
+      `Case ${caseId}: revenue on ${deviation.date} was $${deviation.latestRevenue}, ` +
       `${deviation.percentChange}% versus the prior 14-day average of $${deviation.rollingAverage}. ` +
+      `Pass caseId "${caseId}" to every evidence tool. ` +
       `Investigate the root cause and recommend one concrete fix.${memoryNote}`;
 
     let conclusionEvent = null;
-    const { concluded } = await processTurn(send, session.id, [{ type: "user.message", content: caseBrief }], {
+    const { concluded } = await processTurn(send, caseId, session.id, [{ type: "user.message", content: caseBrief }], {
+      role: "investigator",
       onConclusion: (event) => {
         conclusionEvent = event;
       },
@@ -246,12 +309,12 @@ app.post("/api/investigate", async (req, res) => {
 
     if (concluded && conclusionEvent) {
       const { data: seniorSession } = await trueforge.sessions.create({ agent: { name: SENIOR_AGENT_NAME } });
-      send("session", { caseId: CASE_ID, sessionId: seniorSession.id, role: "senior" });
+      send("session", { caseId, sessionId: seniorSession.id, role: "senior" });
       const briefing =
-        `Case ${CASE_ID}. The investigator concluded: "${conclusionEvent.rootCause}" ` +
+        `Case ${caseId}. The investigator concluded: "${conclusionEvent.rootCause}" ` +
         `(confidence ${conclusionEvent.confidence}), recommending: "${conclusionEvent.recommendedAction}". ` +
-        `Full evidence trail: ${JSON.stringify(investigationHistory.getHistory(CASE_ID))}.`;
-      await runSeniorTurnWithRetry(send, seniorSession.id, [{ type: "user.message", content: briefing }]);
+        `Full evidence trail: ${JSON.stringify(investigationHistory.getHistory(caseId))}.`;
+      await runSeniorTurnWithRetry(send, caseId, seniorSession.id, [{ type: "user.message", content: briefing }]);
     }
   } catch (err) {
     console.error("Failed to start investigation:", err);
@@ -289,9 +352,13 @@ app.post("/api/investigate/approval", async (req, res) => {
   send("board_event", outcome);
 
   const approval = decision === "allow" ? { status: "allow" } : { status: "deny", reason };
-  await processTurn(send, pending.sessionId, [
-    { type: "user.tool_approval", threadId: pending.threadId, toolCallId: pending.toolCallId, approval },
-  ]);
+  await processTurn(
+    send,
+    caseId,
+    pending.sessionId,
+    [{ type: "user.tool_approval", threadId: pending.threadId, toolCallId: pending.toolCallId, approval }],
+    { role: "senior", fixOutcome: decision === "allow" ? "approved" : "denied" }
+  );
   res.end();
 });
 
