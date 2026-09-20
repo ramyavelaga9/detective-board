@@ -27,7 +27,10 @@
         </div>
       </div>
       <div id="investigation-phase" class="investigation-phase" role="status" aria-live="polite" aria-label="Investigation phase: ready">
-        <span class="phase-live" id="phase-live"><i class="ph ph-push-pin-simple"></i> Ready to investigate</span>
+        <div class="phase-status">
+          <span class="phase-live" id="phase-live"><i class="ph ph-push-pin-simple"></i> Ready to investigate</span>
+          <span class="jev-progress jev-only" id="jev-progress" hidden><i class="ph ph-paperclip"></i> <span id="jev-progress-text"></span></span>
+        </div>
         <ol class="phase-steps" aria-hidden="true">
           <li data-phase="evidence"><span class="phase-pin"></span><span class="phase-step-label">Evidence</span></li>
           <li data-phase="leads"><span class="phase-pin"></span><span class="phase-step-label">Leads</span></li>
@@ -36,6 +39,10 @@
         </ol>
       </div>
       <div class="controls">
+        <label class="jev-toggle" title="Show or hide Jev's review of each hypothesis">
+          <input type="checkbox" id="show-jev" checked />
+          <i class="ph ph-paperclip"></i> <span class="jev-toggle-show">Show </span><span class="jev-toggle-long">Jev's view</span><span class="jev-toggle-short">Jev</span>
+        </label>
         <label class="reset-memory">
           <input type="checkbox" id="reset-memory" />
           <i class="ph ph-arrow-counter-clockwise"></i> Reset memory
@@ -85,8 +92,18 @@
           <h3><i class="ph ph-file-text"></i> Senior Detective's Summary</h3>
           <p id="summary-text"></p>
         </div>
+        <div id="jev-rollup" class="jev-rollup" hidden>
+          <h3><i class="ph ph-paperclip"></i> Detective vs Jev</h3>
+          <p id="jev-rollup-summary" class="jev-summary jev-only"></p>
+          <table class="jev-table">
+            <thead><tr><th>Lead</th><th>Detective</th><th class="jev-only">Jev</th></tr></thead>
+            <tbody id="jev-rollup-rows"></tbody>
+          </table>
+        </div>
+        <div id="inspect-panel" class="inspect-panel" hidden></div>
         <div id="approval" class="approval hidden">
           <p id="approval-text"></p>
+          <p id="approval-jev" class="approval-jev" hidden></p>
           <div class="approval-actions">
             <button id="approve-btn"><i class="ph-fill ph-check-circle"></i> Approve</button>
             <button id="deny-btn"><i class="ph ph-x-circle"></i> Deny</button>
@@ -98,6 +115,7 @@
     </main>
 
     <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+    <script src="text-wrap.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

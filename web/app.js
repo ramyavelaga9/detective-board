@@ -2,7 +2,7 @@
 
 const CASE_NODE_ID = "__case__";
 const NODE_W = 184;
-const NODE_H = 108;
+const NODE_H = 156;
 const CASE_W = 224;
 const CASE_H = 112;
 
@@ -29,6 +29,7 @@ const state = {
   edges: [],
   selectedNodeId: null,
   conclusion: null,
+  decisionRequested: false,
 };
 
 const el = (id) => document.getElementById(id);
@@ -166,6 +167,8 @@ function nodeClass(d) {
   const parts = ["node"];
   if (d.type === "case") parts.push("case");
   if (d.verdict) parts.push(`verdict-${d.verdict}`);
+  if (d.jev?.status === "pending" || d.jev?.status === "complete") parts.push(`jev-${d.jev.status}`);
+  if (d.disagrees) parts.push("jev-disagrees");
   return parts.join(" ");
 }
 
@@ -228,18 +231,51 @@ function buildNodeCard(selection) {
     const isCase = d.type === "case";
     const w = isCase ? CASE_W : NODE_W;
     const h = isCase ? CASE_H : NODE_H;
+    if (!isCase) g.append("rect").attr("class", "jev-ring").attr("x", -w / 2 - 5).attr("y", -h / 2 - 5).attr("width", w + 10).attr("height", h + 10).attr("rx", 5);
     g.append("rect").attr("class", "card-shadow").attr("x", -w / 2 + 4).attr("y", -h / 2 + 5).attr("width", w).attr("height", h).attr("rx", 3);
     g.append("rect").attr("class", "card").attr("x", -w / 2).attr("y", -h / 2).attr("width", w).attr("height", h).attr("rx", 2);
     g.append("path").attr("class", "paper-fold").attr("d", `M${w / 2 - 20},${-h / 2}h20v20z`);
-    g.append("line").attr("class", "card-rule").attr("x1", -w / 2 + 16).attr("x2", w / 2 - 16).attr("y1", isCase ? 10 : 4).attr("y2", isCase ? 10 : 4);
+    g.append("line").attr("class", "card-rule").attr("x1", -w / 2 + 16).attr("x2", w / 2 - 16).attr("y1", isCase ? 10 : -h / 2 + 58).attr("y2", isCase ? 10 : -h / 2 + 58);
     g.append("text").attr("class", "source-label").attr("x", -w / 2 + 16).attr("y", -h / 2 + (isCase ? 37 : 24));
     g.append("text").attr("class", "label").attr("x", -w / 2 + 16).attr("y", -h / 2 + (isCase ? 52 : 46));
-    if (!isCase) g.append("text").attr("class", "evidence-detail").attr("x", -w / 2 + 16).attr("y", 25);
-    g.append("text").attr("class", "verdict-label").attr("x", -w / 2 + 16).attr("y", h / 2 - 15);
+    if (!isCase) g.append("text").attr("class", "hypothesis-line").attr("x", -w / 2 + 16).attr("y", -h / 2 + 72);
+    if (!isCase) g.append("text").attr("class", "evidence-detail").attr("x", -w / 2 + 16).attr("y", -h / 2 + 100);
+    g.append("text").attr("class", "verdict-label").attr("x", -w / 2 + 16).attr("y", isCase ? h / 2 - 15 : -h / 2 + 114);
     g.append("circle").attr("class", "pin-shadow").attr("cx", 0).attr("cy", -h / 2 + 10).attr("r", 6.5);
     g.append("circle").attr("class", "pin").attr("cx", 0).attr("cy", -h / 2 + 8).attr("r", 5.5);
     g.append("circle").attr("class", "pin-glint").attr("cx", -1.7).attr("cy", -h / 2 + 6.2).attr("r", 1.35);
+    if (!isCase) buildJevMarkers(g, w, h);
   });
+}
+
+// Jev's marks on a hypothesis card, hidden until a review exists: a paper-clip chip in the card's
+// bottom row (inside the card, so it moves with it and never sits over another card's content),
+// and, when Jev disagrees, an amber ring and a tag above the card's top-left corner.
+function buildJevMarkers(g, w, h) {
+  const chip = g.append("g").attr("class", "jev-chip").attr("transform", `translate(${-w / 2 + 16},${-h / 2 + JEV_CHIP_TOP})`);
+  chip.append("rect").attr("class", "jev-chip-bg").attr("height", JEV_CHIP_HEIGHT).attr("rx", 3);
+  chip.append("text").attr("class", "jev-chip-icon").attr("x", 7).attr("y", 14).text(PAPERCLIP_GLYPH);
+  chip.append("text").attr("class", "jev-chip-label").attr("x", 24).attr("y", 14);
+  const tag = g.append("g").attr("class", "jev-tag").attr("transform", `translate(${-w / 2},${-h / 2 - 20})`);
+  tag.append("rect").attr("width", 92).attr("height", 16).attr("rx", 3);
+  tag.append("text").attr("x", 8).attr("y", 12).text("Jev disagrees");
+}
+
+const JEV_CHIP_TOP = 124; // from the card's top edge; the chip row sits below the status line
+const JEV_CHIP_HEIGHT = 20;
+const HYPOTHESIS_LINE_CHARS = 30; // what fits the card's 152px text width at 10px
+const HYPOTHESIS_LINES = 2;
+const JEV_CHIP_PAD = 30; // icon and padding around the label
+const JEV_CHIP_CHAR_PX = 5.8;
+const PAPERCLIP_GLYPH = "\ue39a"; // the Phosphor icon font's paper clip, so no icon is hand-drawn
+
+const JEV_VERDICT_LABEL = { supports: "Supports", doubts: "Doubts", unsure: "Unsure" };
+const DETECTIVE_VERDICT_LABEL = { confirmed: "Confirmed", rejected: "Ruled out", inconclusive: "Inconclusive" };
+
+function jevChipText(node) {
+  if (node.jev?.status === "pending") return "Jev · reviewing…";
+  if (node.jev?.status !== "complete") return "";
+  return `Jev · ${JEV_VERDICT_LABEL[node.jev.verdict] ?? "Unsure"} · ${node.jev.confidence}%`;
 }
 
 function sourceLabel(node) {
@@ -274,11 +310,48 @@ function setMultilineText(selection, value, maxChars = 24) {
 
 function updateBoardReadout(node) {
   const readout = el("board-readout");
+  renderInspectPanel(node);
   if (!node || node.type === "case") {
     readout.innerHTML = "Case board ready <span>Awaiting evidence</span>";
     return;
   }
   readout.innerHTML = `${escapeHtml(node.label)} <span>${escapeHtml(verdictLabel(node))}</span>`;
+}
+
+/** The Case File's inspect view of the selected hypothesis: the detective's reasoning beside Jev's. */
+function renderInspectPanel(node) {
+  const panel = el("inspect-panel");
+  const inspecting = Boolean(node && node.type !== "case" && node.hypothesis);
+  panel.hidden = !inspecting;
+  panel.innerHTML = inspecting ? inspectHtml(node) : "";
+}
+
+/** The detective's hypothesis beside Jev's reading of it, then what would change Jev's mind. */
+function inspectHtml(node) {
+  const detective =
+    `<section><h4>Detective</h4>` +
+    `<p class="inspect-verdict">${escapeHtml(DETECTIVE_VERDICT_LABEL[node.verdict] ?? node.verdict)} · ${node.confidence}%</p>` +
+    `<p>${escapeHtml(node.hypothesis)}</p></section>`;
+  const title = `<h3><i class="ph ph-magnifying-glass"></i> ${escapeHtml(node.label)}</h3>`;
+  return `${title}<div class="inspect-grid">${detective}${jevInspectHtml(node)}</div>${jevChangeOfMindHtml(node)}`;
+}
+
+function jevInspectHtml(node) {
+  const jev = node.jev;
+  let body = "<p>Jev has not reviewed this hypothesis.</p>";
+  if (jev?.status === "pending") body = "<p>Reviewing the evidence…</p>";
+  if (jev?.status === "complete") {
+    body = `<p class="inspect-verdict">${escapeHtml(JEV_VERDICT_LABEL[jev.verdict] ?? "Unsure")} · ${jev.confidence}%</p><p>${escapeHtml(jev.reasoning)}</p>`;
+  }
+  return `<section class="jev-only jev-inspect${node.disagrees ? " disagrees" : ""}"><h4>Jev</h4>${body}</section>`;
+}
+
+function jevChangeOfMindHtml(node) {
+  if (node.jev?.status !== "complete") return "";
+  return (
+    `<p class="jev-only inspect-change"><b>What would change Jev's mind</b> ${escapeHtml(node.jev.whatWouldChangeMyMind)}</p>` +
+    `<p class="jev-only inspect-note">Jev returns probabilities, not prose. These lines are worded from them.</p>`
+  );
 }
 
 function render() {
@@ -304,11 +377,7 @@ function render() {
   // Same reasoning as the edges above: only the update selection's class is
   // rewritten on verdict changes, so a freshly entering node's one-shot
   // "enter" class survives long enough to actually animate.
-  const selectNode = (_event, d) => {
-    state.selectedNodeId = d.id;
-    updateBoardReadout(d);
-    render();
-  };
+  const selectNode = (_event, d) => selectNodeById(d.id);
   const nodeEnter = nodeSel.enter().append("g").attr("class", (d) => `${nodeClass(d)} enter`)
     .attr("tabindex", 0).attr("role", "button").attr("aria-label", (d) => `Inspect ${d.label}`).call(dragBehavior())
     .on("click", (_event, d) => {
@@ -323,8 +392,17 @@ function render() {
   nodeAll.select("text.source-label").text(sourceLabel);
   nodeAll.select("text.verdict-label").text(verdictLabel);
   setMultilineText(nodeAll.select("text.label"), (d) => d.label, 23);
+  nodeAll.select("text.hypothesis-line").each(function (d) {
+    const text = d3.select(this);
+    text.text("");
+    wrapWithEllipsis(d.hypothesis, HYPOTHESIS_LINE_CHARS, HYPOTHESIS_LINES).forEach((part, index) =>
+      text.append("tspan").attr("x", text.attr("x")).attr("dy", index ? 12 : 0).text(part)
+    );
+  });
   nodeAll.select("text.evidence-detail").text((d) => d.detail || "Collecting evidence…");
-  nodeAll.attr("aria-label", (d) => d.type === "case" ? `Inspect ${d.label}` : `Inspect ${sourceLabel(d)}: ${d.label}. ${d.detail || "Collecting evidence"}`);
+  nodeAll.select("text.jev-chip-label").text(jevChipText);
+  nodeAll.select("rect.jev-chip-bg").attr("width", (d) => JEV_CHIP_PAD + jevChipText(d).length * JEV_CHIP_CHAR_PX);
+  nodeAll.attr("aria-label", (d) => d.type === "case" ? `Inspect ${d.label}` : `Inspect ${sourceLabel(d)}: ${d.label}. ${d.detail || "Collecting evidence"}${d.hypothesis ? `. Hypothesis: ${d.hypothesis}` : ""}${d.disagrees ? ". Jev disagrees with the detective." : ""}`);
 
   simulation.on("tick", () => {
     edgeAll.select("path").attr("d", edgePath);
@@ -383,7 +461,7 @@ function setNodeResult(id, summary, detail) {
  * evidence card: the verdict tool is meant to be called right after the evidence call it rests
  * on, and dropping the verdict instead would leave a confirmed lead with no red line.
  */
-function addConnectionEdge({ hypothesis, evidenceSource, verdict, confidence, edgeStyle }) {
+function addConnectionEdge({ verdictId, hypothesis, evidenceSource, verdict, confidence, edgeStyle }) {
   const unlinked = [...state.edges].reverse().filter((e) => e.hidden);
   const isEvidence = (e) => !String(resolveEnd(e.target)?.source).startsWith("propose_");
   const edge =
@@ -391,12 +469,126 @@ function addConnectionEdge({ hypothesis, evidenceSource, verdict, confidence, ed
   if (!edge) return;
   const node = resolveEnd(edge.target);
   node.verdict = verdict;
+  node.verdictId = verdictId;
+  node.confidence = confidence;
   node.hypothesis = hypothesis;
   edge.edgeStyle = edgeStyle;
   edge.confidence = confidence;
   edge.hidden = false;
   restartSimulation();
   if (state.selectedNodeId === node.id) updateBoardReadout(node);
+}
+
+function selectNodeById(id) {
+  const node = state.nodes.find((n) => n.id === id);
+  if (!node) return;
+  state.selectedNodeId = id;
+  updateBoardReadout(node);
+  render();
+  renderJevRollup();
+}
+
+// ---- Jev's review of each hypothesis ----
+
+const jevLogLines = new Map(); // verdictId -> the event-log line for that review, updated in place when it finishes
+
+const reviewName = (node) => node.label.toLowerCase();
+const shorten = (text, limit) => (text.length > limit ? `${text.slice(0, limit - 1)}…` : text);
+
+function jevProgress() {
+  const reviewed = state.nodes.filter((n) => n.jev);
+  return { done: reviewed.filter((n) => n.jev.status !== "pending").length, total: reviewed.length };
+}
+
+/** "Jev review 4/5" beside the stepper: reviews run in parallel with the investigation, so they are a count, not a stage. */
+function renderJevProgress() {
+  const { done, total } = jevProgress();
+  el("jev-progress").hidden = total === 0;
+  el("jev-progress").classList.toggle("is-done", total > 0 && done === total);
+  el("jev-progress-text").textContent = `Jev review ${done}/${total}`;
+}
+
+/** The Decision stage stays locked until approval has been requested and every Jev review has finished. */
+function syncDecisionStage() {
+  if (!state.decisionRequested) return;
+  const { done, total } = jevProgress();
+  if (done === total) setInvestigationPhase("decision");
+}
+
+function settleJevLogLine(node, event) {
+  const text =
+    event.jev.status === "complete"
+      ? `Jev reviewed ${reviewName(node)}: ${event.jev.verdict} (${event.jev.confidence}%)`
+      : `Jev could not review ${reviewName(node)}`;
+  const line = jevLogLines.get(event.verdictId) ?? logEvent("ph-paperclip", text);
+  line.querySelector("span").textContent = text;
+  line.classList.toggle("verdict-inconclusive", event.disagrees);
+}
+
+/** A Jev review starting or finishing. One for a verdict that is not on this board (a stale run's late answer) is dropped. */
+function applyJevEvent(event) {
+  const node = state.nodes.find((n) => n.verdictId === event.verdictId);
+  if (!node) return;
+  if (event.type === "verdict_review_started") {
+    node.jev = { status: "pending" };
+    jevLogLines.set(event.verdictId, logEvent("ph-paperclip", `Jev reviewing ${reviewName(node)}…`));
+  } else {
+    node.jev = event.jev;
+    node.disagrees = event.disagrees;
+    node.alignment = event.alignment;
+    settleJevLogLine(node, event);
+  }
+  render();
+  if (state.selectedNodeId === node.id) updateBoardReadout(node);
+  renderJevRollup();
+  renderJevProgress();
+  syncDecisionStage();
+  if (!el("approval").classList.contains("hidden")) refreshApprovalGate();
+}
+
+function jevSummaryText(hypotheses) {
+  const reviewed = hypotheses.filter((n) => n.jev?.status === "complete");
+  const still = hypotheses.filter((n) => n.jev?.status === "pending").length;
+  const count = (alignment) => reviewed.filter((n) => n.alignment === alignment).length;
+  if (!reviewed.length && !still) return "";
+  const parts = reviewed.length ? [`Jev agrees on ${count("agrees")} of ${reviewed.length}`] : [];
+  if (count("disagrees")) parts.push(`disagrees on ${count("disagrees")}`);
+  if (count("differs")) parts.push(`differs on ${count("differs")}`);
+  if (still) parts.push(`${still} still reviewing`);
+  return `${parts.join(", ")}.`;
+}
+
+function cell(text, className = "") {
+  const td = document.createElement("td");
+  td.textContent = text;
+  if (className) td.className = className;
+  return td;
+}
+
+function jevCellText(node) {
+  if (node.jev?.status === "complete") return `${JEV_VERDICT_LABEL[node.jev.verdict] ?? "Unsure"} · ${node.jev.confidence}%`;
+  return node.jev?.status === "pending" ? "reviewing…" : "none";
+}
+
+function rollupRow(node) {
+  const tr = document.createElement("tr");
+  tr.dataset.nodeId = node.id;
+  tr.tabIndex = 0;
+  tr.setAttribute("role", "button");
+  tr.classList.toggle("selected", node.id === state.selectedNodeId);
+  const detective = `${DETECTIVE_VERDICT_LABEL[node.verdict] ?? node.verdict} · ${node.confidence}%`;
+  tr.append(cell(node.label), cell(detective), cell(jevCellText(node), `jev-only${node.disagrees ? " disagrees" : ""}`));
+  return tr;
+}
+
+/** One row per hypothesis, the detective's verdict beside Jev's; a row selects its card on the board. */
+function renderJevRollup() {
+  const hypotheses = state.nodes.filter((n) => n.type !== "case" && n.verdict);
+  const summary = jevSummaryText(hypotheses);
+  el("jev-rollup").hidden = hypotheses.length === 0;
+  el("jev-rollup-summary").textContent = summary;
+  el("jev-rollup-summary").hidden = summary === "";
+  el("jev-rollup-rows").replaceChildren(...hypotheses.map(rollupRow));
 }
 
 // ---- Case file panel + event log ----
@@ -464,13 +656,72 @@ function renderConclusion(event) {
     `Recommended: ${escapeHtml(event.recommendedAction)}</div>`;
 }
 
+let approvalTool = ""; // the fix the senior detective wants to run
+let approvalGate = null; // the server's latest word on whether Approve is allowed (see /jev-gate)
+let approveConfirming = false; // the first click on a flagged Approve, waiting for the confirming one
+
 function showApproval(event) {
+  approvalTool = event.toolName;
+  approvalGate = null;
+  approveConfirming = false;
   el("approval").classList.remove("hidden");
-  el("approval-text").textContent = `The senior detective wants to run "${event.toolName}". Approve the fix?`;
+  renderApprovalGate();
+  refreshApprovalGate();
+}
+
+async function refreshApprovalGate() {
+  try {
+    const res = await fetch(`/api/investigate/${state.caseId}/jev-gate`);
+    approvalGate = res.ok ? await res.json() : null;
+  } catch {
+    approvalGate = null;
+  }
+  approveConfirming = false;
+  renderApprovalGate();
+}
+
+function renderApprovalJevLine(gate) {
+  const line = el("approval-jev");
+  const jev = gate?.acted?.jev;
+  line.hidden = !jev;
+  if (jev) line.textContent = `Jev on "${shorten(gate.acted.hypothesis, 70)}": ${JEV_VERDICT_LABEL[jev.verdict] ?? "Unsure"} · ${jev.confidence}%`;
+}
+
+/**
+ * Jev's part of the approval box, from the server's gate: a flagged review (Jev disagrees, or is under
+ * 70% confident) tints the box amber and makes Approve a two-click confirm; reviews still running
+ * disable Approve. Deny is never held back. This stays visible when Jev's view is hidden, because it gates a real action.
+ */
+function renderApprovalGate() {
+  const box = el("approval");
+  box.classList.toggle("review", approvalGate?.state === "review");
+  box.classList.toggle("blocked", approvalGate?.state === "blocked");
+  el("approval-text").textContent = approvalGate?.copy
+    ? `${approvalGate.copy} Proposed fix: ${approvalTool}.`
+    : `The senior detective wants to run "${approvalTool}". Approve the fix?`;
+  renderApprovalJevLine(approvalGate);
+  const approve = el("approve-btn");
+  approve.disabled = approvalGate?.state === "blocked";
+  approve.classList.toggle("confirming", approveConfirming);
+  approve.innerHTML = approveConfirming
+    ? `<i class="ph-fill ph-warning-circle"></i> Confirm approve`
+    : `<i class="ph-fill ph-check-circle"></i> Approve`;
+}
+
+function onApproveClick() {
+  if (approvalGate?.requiresConfirm && !approveConfirming) {
+    approveConfirming = true;
+    renderApprovalGate();
+    return;
+  }
+  respondToApproval("allow", approveConfirming);
 }
 
 function hideApprovalWithOutcome(event) {
   el("approval").classList.add("hidden");
+  el("approval").classList.remove("review", "blocked");
+  approvalGate = null;
+  approveConfirming = false;
   // The conclusion box is a flex row (icon + text column): the outcome belongs under the text,
   // not as a third column floating to its right.
   const box = el("conclusion");
@@ -478,8 +729,8 @@ function hideApprovalWithOutcome(event) {
 }
 
 function handleBoardEvent(event) {
-  const extraClass = event.type === "edge_added" ? `verdict-${event.verdict}` : "";
-  logEvent(ICON_BY_EVENT_TYPE[event.type] ?? "ph-info", describeEventForLog(event), extraClass);
+  if (event.type === "verdict_review_started" || event.type === "verdict_checked") return applyJevEvent(event);
+  logEvent(ICON_BY_EVENT_TYPE[event.type] ?? "ph-info", describeEventForLog(event), event.type === "edge_added" ? `verdict-${event.verdict}` : "");
   if (event.type === "node_added") addEvidenceNode(event.id, event.label, event.detail, event.source);
   else if (event.type === "node_result") setNodeResult(event.id, event.summary, event.detail);
   else if (event.type === "edge_added") {
@@ -490,9 +741,11 @@ function handleBoardEvent(event) {
   else if (event.type === "approval_required") {
     showApproval(event);
     setCaseStatus(state.caseId, "awaiting");
-    setInvestigationPhase("decision");
+    state.decisionRequested = true;
+    syncDecisionStage();
   } else if (event.type === "approval_resolved") {
     hideApprovalWithOutcome(event);
+    state.decisionRequested = false;
     setInvestigationPhase("closing");
   }
 }
@@ -555,7 +808,7 @@ function resetCaseClosure() {
   window.confetti?.reset?.();
 }
 
-async function respondToApproval(decision) {
+async function respondToApproval(decision, confirmed = false) {
   setBusy(true);
   setCaseStatus(state.caseId, "investigating");
   setInvestigationPhase("closing");
@@ -565,7 +818,7 @@ async function respondToApproval(decision) {
     const res = await fetch("/api/investigate/approval", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ caseId: state.caseId, decision }),
+      body: JSON.stringify({ caseId: state.caseId, decision, confirmed }),
     });
     await consumeSSE(res, {
       activity: handleActivity,
@@ -578,8 +831,8 @@ async function respondToApproval(decision) {
     logEvent("ph-warning", `Error: ${err.message}`);
   } finally {
     stopLiveTicker();
-    el("approve-btn").disabled = false;
     el("deny-btn").disabled = false;
+    renderApprovalGate();
     settleCaseStatus();
     setBusy(false);
   }
@@ -602,6 +855,10 @@ async function startInvestigation() {
   updateBoardReadout();
   stopLiveTicker();
   state.conclusion = null;
+  state.decisionRequested = false;
+  jevLogLines.clear();
+  renderJevRollup();
+  renderJevProgress();
   resetCaseClosure();
 
   try {
@@ -668,7 +925,8 @@ function viewFor(caseId) {
       logHtml: "",
       summary: { visible: false, text: "" },
       stamp: { visible: false, title: "", sub: "", declined: false },
-      approval: { visible: false, text: "" },
+      approval: { visible: false, tool: "" },
+      decisionRequested: false,
       phase: "ready",
     });
   }
@@ -691,7 +949,8 @@ function saveView() {
     sub: el("case-stamp-sub").textContent,
     declined: el("case-stamp").classList.contains("declined"),
   };
-  v.approval = { visible: !el("approval").classList.contains("hidden"), text: el("approval-text").textContent };
+  v.approval = { visible: !el("approval").classList.contains("hidden"), tool: approvalTool };
+  v.decisionRequested = state.decisionRequested;
 }
 
 function loadView(caseId) {
@@ -700,6 +959,8 @@ function loadView(caseId) {
   state.edges = v.edges;
   state.conclusion = v.conclusion;
   state.selectedNodeId = null;
+  state.decisionRequested = v.decisionRequested;
+  jevLogLines.clear();
   ensureCaseNode();
   // The board only has a measurable size once the workspace is visible. Measuring here also
   // re-pins the case node and re-lays-out every card in its slot, so a restored view that dates
@@ -716,9 +977,18 @@ function loadView(caseId) {
   el("case-stamp-sub").textContent = v.stamp.sub;
   el("case-stamp").classList.toggle("declined", v.stamp.declined);
   el("case-stamp").classList.toggle("hidden", !v.stamp.visible);
-  el("approval-text").textContent = v.approval.text;
+  approvalTool = v.approval.tool;
+  approvalGate = null;
+  approveConfirming = false;
   el("approval").classList.toggle("hidden", !v.approval.visible);
+  if (v.approval.visible) {
+    renderApprovalGate();
+    refreshApprovalGate();
+  }
   renderInvestigationPhase(v.phase);
+  renderJevRollup();
+  renderJevProgress();
+  syncDecisionStage();
 }
 
 function setCaseStatus(caseId, status) {
@@ -876,5 +1146,17 @@ el("all-cases-btn").addEventListener("click", showPicker);
 loadCases();
 
 el("start-btn").addEventListener("click", startInvestigation);
-el("approve-btn").addEventListener("click", () => respondToApproval("allow"));
+el("approve-btn").addEventListener("click", onApproveClick);
 el("deny-btn").addEventListener("click", () => respondToApproval("deny"));
+el("show-jev").addEventListener("change", (event) => document.body.classList.toggle("jev-hidden", !event.target.checked));
+el("jev-rollup-rows").addEventListener("click", (event) => {
+  const row = event.target.closest("tr");
+  if (row) selectNodeById(row.dataset.nodeId);
+});
+el("jev-rollup-rows").addEventListener("keydown", (event) => {
+  const row = event.target.closest("tr");
+  if (row && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault();
+    selectNodeById(row.dataset.nodeId);
+  }
+});

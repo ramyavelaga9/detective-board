@@ -12,6 +12,11 @@
   --green-deep: #2d6b42;
   --gray: #7d7368;
   --amber: #c2953b;
+  --jev: #2f7f86;
+  --jev-light: #8fc4c8;
+  --jev-paper: #d6e6e4;
+  --jev-ink: #1f5a60;
+  --flag: #d69a2a;
   --font-display: "Space Grotesk", sans-serif;
   --font-mono: "Special Elite", "Courier New", monospace;
   --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -345,7 +350,8 @@ button:disabled {
   font-weight: 700;
 }
 
-.node text.source-label, .node text.evidence-detail, .node text.verdict-label { pointer-events: none; }
+.node text.source-label, .node text.hypothesis-line, .node text.evidence-detail, .node text.verdict-label { pointer-events: none; }
+.node text.hypothesis-line { fill: #4a3d30; font-family: var(--font-body); font-size: 10px; font-style: italic; }
 .node text.source-label { fill: #584a3b; font-family: var(--font-mono); font-size: 10px; font-weight: 600; letter-spacing: 0.04em; }
 .node text.evidence-detail { fill: #625747; font-family: var(--font-body); font-size: 10px; font-weight: 600; }
 .node text.verdict-label { fill: #766858; font-family: var(--font-body); font-size: 10px; }
@@ -1143,4 +1149,206 @@ body[data-view="picker"] .investigation-phase {
     margin-top: 0;
     margin-left: auto;
   }
+}
+
+/* ---- Jev's review of each hypothesis ----
+   Teal marks Jev everywhere (a paper clip, where the detective's marks are pins and red) and amber marks only a
+   disagreement, so agreement stays quiet and divergence is what draws the eye. */
+
+/* Header toggle: hides every Jev chip, marker, and Jev column; the approval box keeps its Jev line because it gates a real action. */
+.jev-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-dim);
+  cursor: pointer;
+  user-select: none;
+}
+
+.jev-toggle input { accent-color: var(--jev); }
+.jev-toggle i { color: var(--jev-light); }
+.jev-toggle-short { display: none; }
+
+body.jev-hidden .jev-only { display: none !important; }
+
+/* Stepper: Jev's parallel reviews are a count under the live label, not a stage of their own. */
+.phase-status {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 132px;
+}
+
+.jev-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--jev-light);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.jev-progress.is-done { color: #72bc83; }
+
+/* Chip, ring, and tag on a card (SVG): hidden until a review exists. */
+.jev-chip,
+.jev-ring,
+.jev-tag {
+  display: none;
+  pointer-events: none;
+}
+
+.node.jev-pending .jev-chip,
+.node.jev-complete .jev-chip,
+.node.jev-disagrees .jev-ring,
+.node.jev-disagrees .jev-tag {
+  display: inline;
+}
+
+body.jev-hidden .jev-chip,
+body.jev-hidden .jev-ring,
+body.jev-hidden .jev-tag {
+  display: none !important;
+}
+
+.jev-chip-bg { fill: var(--jev-paper); stroke: var(--jev); stroke-width: 1px; }
+.jev-chip-icon { fill: var(--jev-ink); font-family: "Phosphor"; font-size: 12px; }
+.jev-chip-label { fill: var(--jev-ink); font-family: var(--font-mono); font-size: 10.5px; font-weight: 700; letter-spacing: 0.02em; }
+
+.node.jev-pending .jev-chip-bg { fill: rgba(214, 230, 228, 0.55); stroke-dasharray: 3 2; }
+.node.jev-pending .jev-chip-label { font-style: italic; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .node.jev-pending .jev-chip { animation: jev-pulse 1.4s ease-in-out infinite; }
+}
+
+@keyframes jev-pulse {
+  50% { opacity: 0.55; }
+}
+
+.jev-ring { fill: none; stroke: var(--flag); stroke-width: 3px; }
+.jev-tag rect { fill: var(--flag); }
+.jev-tag text { fill: #3a2508; font-family: var(--font-mono); font-size: 10.5px; font-weight: 700; }
+
+/* Case File: rollup table and inspect view, styled as the sidebar's other cards. */
+.jev-rollup,
+.inspect-panel {
+  background: var(--panel-raised);
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--jev);
+  border-radius: 8px;
+  padding: 14px;
+  margin-bottom: 18px;
+}
+
+.jev-rollup h3,
+.inspect-panel h3 { margin-bottom: 8px; }
+.jev-rollup h3 i,
+.inspect-panel h3 i { color: var(--jev-light); }
+
+.jev-summary {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.jev-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.jev-table th {
+  padding: 0 6px 6px 0;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.jev-table td {
+  padding: 6px 6px 6px 0;
+  border-top: 1px solid var(--hairline);
+  color: var(--ink-dim);
+}
+
+.jev-table tbody tr { cursor: pointer; }
+.jev-table tbody tr:hover td,
+.jev-table tbody tr.selected td { color: var(--ink); background: rgba(255, 255, 255, 0.04); }
+.jev-table tbody tr.selected td:first-child { box-shadow: inset 2px 0 0 var(--jev-light); padding-left: 6px; }
+.jev-table tbody tr:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+.jev-table td.disagrees { color: #e8b04a; font-weight: 600; }
+
+.inspect-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+body.jev-hidden .inspect-grid { grid-template-columns: 1fr; }
+
+.inspect-grid section { min-width: 0; }
+
+.inspect-grid h4 {
+  margin: 0 0 6px;
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.inspect-grid .jev-inspect h4 { color: var(--jev-light); }
+.inspect-panel p { margin: 0 0 6px; font-size: 12px; line-height: 1.5; color: var(--ink); }
+.inspect-verdict { font-weight: 700; }
+.jev-inspect.disagrees .inspect-verdict { color: #e8b04a; }
+
+.inspect-change {
+  margin: 12px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+.inspect-change b { display: block; margin-bottom: 2px; color: var(--jev-light); font-weight: 600; }
+.inspect-panel .inspect-note { margin: 6px 0 0; font-size: 11px; font-style: italic; color: var(--ink-dim); }
+
+/* Approval: a flagged Jev review tints the box amber and turns Approve into a two-click confirm. */
+.approval-jev {
+  margin: 0 0 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--jev-light);
+}
+
+.approval.review { background: #3b2a10; border-color: #b38735; }
+.approval.review .approval-jev { color: #e8b04a; }
+.approval.blocked { background: #2b2620; border-color: var(--hairline); }
+
+#approve-btn.confirming {
+  background: #b38735;
+  color: #2a1c05;
+  box-shadow: 0 2px 0 #7d5d20;
+}
+
+/* A crowded header (laptop widths): the toggle and the centered stepper shrink so they stay clear of each other. */
+@media (max-width: 1500px) {
+  .jev-toggle-long { display: none; }
+  .jev-toggle-short { display: inline; }
+}
+
+@media (max-width: 1450px) {
+  .jev-toggle-show { display: none; }
+  .investigation-phase { min-width: 400px; gap: 10px; }
+}
+
+@media (max-width: 1320px) {
+  .controls { gap: 12px; }
+  #start-btn { padding: 10px 12px; }
 }

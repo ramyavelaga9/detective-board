@@ -23,6 +23,11 @@ import { nextLoopDecision, MAX_INVESTIGATION_STEPS } from "./investigation-loop.
 import { resolveApprovalOutcome } from "./verdict.mjs";
 import { createToolCallAccumulator, resolveActualToolCall, peekActualToolName } from "./tool-call-accumulator.mjs";
 import { toThinkingActivity, toToolStartedActivity, toToolFinishedActivity } from "./activity-events.mjs";
+import { createEvidenceTracker } from "./evidence-tracker.mjs";
+import { createJevClient } from "./jev-check.mjs";
+import { createMockJevClient } from "./jev-mock.mjs";
+import { checkApproval, describeReviewOutcome } from "./jev-review.mjs";
+import { createReviewBook } from "./review-book.mjs";
 
 const APPROVAL_GATED_TOOLS = new Set(["propose_restock_action", "propose_marketing_action"]);
 // TrueForge's own progressive tool-discovery calls, not evidence - see the
@@ -42,6 +47,12 @@ const trueforge = new TrueForge({ baseUrl: TRUEFORGE_URL, timeoutInSeconds: 600 
 
 const boardStore = createBoardStore();
 const investigationHistory = createInvestigationHistory();
+const reviewBook = createReviewBook();
+// Optional: with no TYPESAFE_API_KEY the client is disabled and verdicts get no Jev review.
+// JEV_MOCK=1 swaps in scripted reviews (see jev-mock.mjs) for demos and UI work.
+const useMockJev = process.env.JEV_MOCK === "1";
+const jev = useMockJev ? createMockJevClient() : createJevClient({ apiKey: process.env.TYPESAFE_API_KEY });
+if (useMockJev) console.log("Jev reviews are scripted (JEV_MOCK=1), not from the Jev API.");
 
 // caseId -> { toolCallId, threadId, sessionId } for the one paused
 // fix-action call (restock or ad spend) per case currently awaiting a human decision.
@@ -55,6 +66,43 @@ app.use(express.static(path.join(__dirname, "..", "web")));
 /** Matches the transient provider-overload errors observed from Gemini's preview flash model under load - worth one retry, unlike a real config/auth failure. */
 function isTransientProviderError(message) {
   return /\b503\b|UNAVAILABLE|high demand/i.test(message ?? "");
+}
+
+/**
+ * Opens a Server-Sent Events response and returns its send function. Sends after the
+ * stream has ended are ignored: a second opinion can land after the route finished,
+ * and writing to an ended response would throw.
+ */
+function openEventStream(res) {
+  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
+  return (event, data) => {
+    if (!res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+}
+
+/** Records Jev's answer (or its failure) and tells the board; a late answer from a reset run settles nothing and is dropped. */
+function settleReview(emit, caseId, verdictEvent, review) {
+  const { verdictId, verdict } = verdictEvent;
+  const settled = review ? reviewBook.completeReview(caseId, verdictId, review) : reviewBook.failReview(caseId, verdictId);
+  if (settled) emit({ type: "verdict_checked", verdictId, ...describeReviewOutcome(verdict, settled.jev) });
+}
+
+/**
+ * Starts Jev's review of a verdict in the background. The board hears "verdict_review_started"
+ * now and "verdict_checked" when it settles, so a review is never left pending: a failed or
+ * throwing review is settled as failed.
+ */
+function requestSecondOpinion(emit, caseId, evidenceText, verdictEvent) {
+  const { verdictId, hypothesis, evidenceSource, verdict } = verdictEvent;
+  if (!evidenceText || !jev.isEnabled() || !reviewBook.startReview(caseId, verdictId)) return;
+  emit({ type: "verdict_review_started", verdictId, evidenceSource });
+  jev
+    .checkVerdict({ hypothesis, evidence: evidenceText, detectiveVerdict: verdict })
+    .then((review) => settleReview(emit, caseId, verdictEvent, review))
+    .catch((err) => {
+      console.error("Jev review failed:", err);
+      settleReview(emit, caseId, verdictEvent, null);
+    });
 }
 
 /**
@@ -101,6 +149,7 @@ async function processTurn(send, caseId, sessionId, inputItems, { role, fixOutco
     announce(toThinkingActivity(role));
     const stream = await trueforge.sessions.createTurnStream(sessionId, { input: inputItems });
     const toolCalls = createToolCallAccumulator();
+    const evidence = createEvidenceTracker();
     const loggedCalls = new Set();
     const announcedCalls = new Set();
     const pendingCalls = new Set();
@@ -157,6 +206,8 @@ async function processTurn(send, caseId, sessionId, inputItems, { role, fixOutco
             emit(boardEvent);
             if (boardEvent?.type === "edge_added") {
               investigationHistory.recordVerdict(caseId, boardEvent.hypothesis, boardEvent.verdict);
+              reviewBook.addHypothesis(caseId, boardEvent);
+              requestSecondOpinion(emit, caseId, evidence.latestFor(boardEvent.evidenceSource), boardEvent);
             }
             if (boardEvent?.type === "conclusion") {
               concluded = true;
@@ -181,6 +232,7 @@ async function processTurn(send, caseId, sessionId, inputItems, { role, fixOutco
                 resultText: event.content,
               })
             );
+            if (resolved) evidence.record(resolved.name, event.content);
           }
           toolCalls.complete(event.toolCallId);
           pendingCalls.delete(call);
@@ -273,10 +325,10 @@ app.post("/api/investigate", async (req, res) => {
     return res.status(400).json({ error: `Unknown case "${caseId}". Choose one of: ${listCases().map((c) => c.id).join(", ")}` });
   }
   boardStore.resetCase(caseId);
+  reviewBook.reset(caseId);
   if (resetMemory) investigationHistory.resetCase(caseId);
 
-  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
-  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  const send = openEventStream(res);
 
   // SSE headers are already committed above, so a failure here can't fall back to
   // an HTTP error status - it has to surface as an "error" event on the open
@@ -328,11 +380,16 @@ app.get("/api/investigate/:caseId/snapshot", (req, res) => {
   res.json({ caseId: req.params.caseId, events: boardStore.getSnapshot(req.params.caseId) });
 });
 
+// Where Approve stands: still waiting on Jev reviews, needs an explicit confirm, or clear to go.
+app.get("/api/investigate/:caseId/jev-gate", (req, res) => {
+  res.json(reviewBook.gate(req.params.caseId));
+});
+
 // Resumes a paused turn after a human approve/reject decision. Resolves
 // from pendingApprovals rather than any client-supplied session details,
 // so a stale or forged request can't resume someone else's paused turn.
 app.post("/api/investigate/approval", async (req, res) => {
-  const { caseId, decision, reason } = req.body ?? {};
+  const { caseId, decision, reason, confirmed } = req.body ?? {};
   if (!caseId) return res.status(400).json({ error: "caseId is required" });
 
   let outcome;
@@ -344,19 +401,20 @@ app.post("/api/investigate/approval", async (req, res) => {
 
   const pending = pendingApprovals.get(caseId);
   if (!pending) return res.status(400).json({ error: `Case ${caseId} has no pending approval` });
+  const approval = checkApproval({ decision, confirmed: confirmed === true, gate: reviewBook.gate(caseId) });
+  if (!approval.ok) return res.status(approval.status).json({ error: approval.error });
   pendingApprovals.delete(caseId);
 
-  res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
-  const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  const send = openEventStream(res);
   boardStore.addEvent(caseId, outcome);
   send("board_event", outcome);
 
-  const approval = decision === "allow" ? { status: "allow" } : { status: "deny", reason };
+  const toolApproval = decision === "allow" ? { status: "allow" } : { status: "deny", reason };
   await processTurn(
     send,
     caseId,
     pending.sessionId,
-    [{ type: "user.tool_approval", threadId: pending.threadId, toolCallId: pending.toolCallId, approval }],
+    [{ type: "user.tool_approval", threadId: pending.threadId, toolCallId: pending.toolCallId, approval: toolApproval }],
     { role: "senior", fixOutcome: decision === "allow" ? "approved" : "denied" }
   );
   res.end();

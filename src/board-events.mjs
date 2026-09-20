@@ -141,11 +141,12 @@ function describeEvidenceFact(toolName, resultText) {
   return summarizeEvidenceResult(resultText);
 }
 
-function toVerdictEdgeEvent(args) {
+/** `verdictId` (the verdict call's id) lets a later second opinion find the card this verdict landed on. */
+function toVerdictEdgeEvent(args, verdictId) {
   const { hypothesis, evidenceSource, verdict, confidence } = args ?? {};
   try {
     const classified = classifyConnection({ verdict, confidence });
-    return { type: "edge_added", hypothesis, evidenceSource: normalizeEvidenceSource(evidenceSource), ...classified };
+    return { type: "edge_added", verdictId, hypothesis, evidenceSource: normalizeEvidenceSource(evidenceSource), ...classified };
   } catch {
     return null;
   }
@@ -181,7 +182,7 @@ function toApprovalRequiredEvent(streamEvent) {
 
 function toBoardEvent(streamEvent) {
   if (streamEvent.type === "tool_call" && streamEvent.toolName === "record_hypothesis_verdict") {
-    return toVerdictEdgeEvent(streamEvent.args);
+    return toVerdictEdgeEvent(streamEvent.args, streamEvent.toolCallId);
   }
   if (streamEvent.type === "tool_call" && streamEvent.toolName === "conclude_investigation") {
     return toConclusionEvent(streamEvent.args);

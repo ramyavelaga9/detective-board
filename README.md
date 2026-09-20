@@ -10,7 +10,7 @@ Built for the [Agent Harness Hackathon](https://luma.com/truefoundry-agent-harne
 
 1. **Case picker.** The app opens on a box for every case. Pick one to open its board.
 2. **Case rail.** A slim list of all cases on the left, each with its status (Not started, Investigating, Awaiting approval, Solved, Closed). Each case keeps its own board, event log, summary, and phase while you switch. The rail locks while an investigation is running.
-3. **The board.** Every clue is a pinned paper card labeled with its evidence source. Red strings tie each verdict back to the case, with the agent's confidence score:
+3. **The board.** Every clue is a pinned paper card labeled with its evidence source and, once the detective has a verdict, the hypothesis it tested (two cards can share a source, such as marketing data used for two different hypotheses). Red strings tie each verdict back to the case, with the agent's confidence score:
 
    | Line | Verdict | Card label |
    |---|---|---|
@@ -19,7 +19,7 @@ Built for the [Agent Harness Hackathon](https://luma.com/truefoundry-agent-harne
    | Dotted amber | Inconclusive | Needs more evidence |
    | (no line) | No verdict recorded | Lead collected, analysis pending |
 
-   Click a card to inspect what the agent concluded about it.
+   Click a card to inspect it: the Case File shows the detective's hypothesis and Jev's reading of it side by side. With Jev enabled (below), each hypothesis card also carries a paper-clip chip such as "Jev · Doubts · 59%", and a card where Jev disagrees with the detective gets an amber ring and a "Jev disagrees" tag.
 4. **Phase tracker.** Gathering evidence, testing leads, senior review, awaiting decision, case closed.
 5. **Live event log.** Every step as it starts: the model thinking (with elapsed seconds on slow steps), TrueForge's tool discovery, each tool call the moment its name arrives, every verdict, and the conclusion.
 6. **Case file.** The investigator's conclusion, the approval banner, and the senior detective's summary.
@@ -70,6 +70,18 @@ Every evidence tool takes a required `caseId`, so one MCP server serves all case
 | `propose_restock_action` | **Approval-gated.** Logs a simulated restock |
 | `propose_marketing_action` | **Approval-gated.** Logs a simulated ad-spend change |
 
+### Jev's review of each hypothesis (optional)
+
+The investigator's verdict and confidence are self-reported by an LLM, so they are not calibrated. If `TYPESAFE_API_KEY` is set, every hypothesis is also reviewed by [Jev](https://docs.typesafe.ai), TypeSafe AI's "System One" model, which returns a choice with calibrated probabilities instead of text. The backend sends Jev the hypothesis and the evidence tool's latest result as one question ("does the evidence support, contradict, or say nothing about the hypothesis?"). Reviews run in parallel, in the background, so they never slow the investigation.
+
+Each hypothesis carries a review: `verdict` (`supports`, `doubts`, or `unsure`), `confidence` (0 to 100), `reasoning`, and `whatWouldChangeMyMind`. Jev returns no prose, so the last two are worded from its probabilities (its top reading and its runner-up), and the inspect view says so. A review is `pending`, `complete`, or `failed`, and a missing or failed review is simply left out of the UI.
+
+- **Disagreement** is a direct conflict: the detective confirmed and Jev doubts it, or the detective ruled it out and Jev supports it. Agreement stays visually quiet; only a disagreement gets the amber ring and tag.
+- **Where it shows:** a chip on each card, the inspect view, a Detective-versus-Jev table in the Case File (a row selects its card), "Jev review 4/5" beside the stepper, and one event-log line per review. The Decision stage does not unlock until every review has finished. The header's "Show Jev's view" toggle hides all of it except the approval box.
+- **Approval gating:** the approval box shows Jev's verdict on the hypothesis the fix acts on (the confirmed one the detective is most sure of). If Jev disagrees, or is under 70% confident, the box turns amber, says so, and Approve needs a second, confirming click. While reviews are still running, Approve is disabled. Deny is always one click. The backend enforces this (`POST /api/investigate/approval` returns 409 without `confirmed: true`), not just the UI.
+
+Without a key, or if the Jev API is unreachable, slow, or rate limited, hypotheses simply get no review. To see the pending, agreeing, and disagreeing states without an API key, start the backend with `JEV_MOCK=1`: it swaps in scripted reviews that cycle through an agreeing, a conflicting, and an unsure reading, each taking about a second and a half.
+
 ### What TrueForge handles
 
 Model routing across two agents, the MCP connection and progressive tool discovery, streaming, a server-enforced `iteration_limit` (70 for the investigator, 15 for the senior), and the native approval pause and resume. One idempotent script (`npm run setup`) registers the model provider, the MCP server, and both agents through TrueForge's REST API, so the harness config is code.
@@ -91,6 +103,8 @@ Create a `.env` file in the project root:
 ```
 OPENAI_API_KEY=sk-...
 ```
+
+Optionally add `TYPESAFE_API_KEY=...` to enable Jev's review of each hypothesis.
 
 Then, in separate terminals:
 
@@ -114,6 +128,8 @@ The page loads D3, Phosphor icons, canvas-confetti, and Google Fonts from CDNs, 
 | Variable | Default | Purpose |
 |---|---|---|
 | `OPENAI_API_KEY` | (required) | Registered with TrueForge by `npm run setup` |
+| `TYPESAFE_API_KEY` | (optional) | Enables Jev's review of each hypothesis. Read by the backend only |
+| `JEV_MOCK` | (unset) | Set to `1` to use scripted Jev reviews instead of the API, for demos and UI work |
 | `PORT` | `8788` | Backend port |
 | `MCP_PORT` | `8793` | Evidence MCP server port |
 | `TRUEFORGE_URL` | `http://localhost:8790` | Where TrueForge is running |
@@ -127,7 +143,8 @@ The page loads D3, Phosphor icons, canvas-confetti, and Google Fonts from CDNs, 
 |---|---|
 | `GET /api/cases` | The case list, with a headline computed from each case's own data |
 | `POST /api/investigate` | Body `{ caseId, resetMemory }`. Streams SSE: `session`, `activity`, `board_event`, `delta`, `summary`, `error`, `done` |
-| `POST /api/investigate/approval` | Body `{ caseId, decision: "allow" \| "deny" }`. Resumes the paused turn and streams the rest |
+| `POST /api/investigate/approval` | Body `{ caseId, decision: "allow" \| "deny", confirmed }`. Resumes the paused turn and streams the rest. An allow returns 409 while Jev reviews are running, or without `confirmed: true` when Jev flagged the fix |
+| `GET /api/investigate/:caseId/jev-gate` | Where Approve stands: blocked, needs a confirm, or clear, plus Jev's view of the hypothesis being acted on |
 | `GET /api/investigate/:caseId/snapshot` | The case's board events so far (in memory) |
 | `GET /api/health` | Health check |
 
@@ -145,7 +162,7 @@ This is a temporary demo deploy, not a hardened production one: TrueForge's stan
 npm test
 ```
 
-Runs `node --test` over the pure, dependency-free modules: the evidence data for both cases, verdict scoring, board-event translation (including evidence-source normalization), activity events, tool-call accumulation, investigation history and loop limits, board snapshotting, and the action logs. The MCP server, setup script, and backend need a live TrueForge instance, so they are not unit tested directly.
+Runs `node --test` over the pure, dependency-free modules: the evidence data for both cases, verdict scoring, board-event translation (including evidence-source normalization), activity events, tool-call accumulation, the evidence tracker, the Jev client (against a fake `fetch`) and mock, the disagreement and approval-gating rules, the review book, the card text wrapper, investigation history and loop limits, board snapshotting, and the action logs. The MCP server, setup script, and backend need a live TrueForge instance, so they are not unit tested directly.
 
 ## Project structure
 
@@ -157,6 +174,11 @@ src/
   setup-trueforge.mjs       Registers provider, MCP server, and agents
   board-events.mjs          Stream events to board events
   activity-events.mjs       Log-only "what is the agent doing" lines
+  jev-check.mjs             Asks Jev to review a hypothesis
+  jev-review.mjs            Review shape, disagreement rule, approval gate
+  jev-mock.mjs              Scripted stand-in for Jev (JEV_MOCK=1)
+  review-book.mjs           Per-case hypotheses and their review state
+  evidence-tracker.mjs      Latest result per evidence tool, to pair with a verdict
   tool-call-accumulator.mjs Reassembles streamed tool calls
   verdict.mjs               Verdict, confidence, edge style, approval outcome
   investigation-history.mjs Per-case memory

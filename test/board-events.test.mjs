@@ -67,6 +67,16 @@ test("toBoardEvent turns a record_hypothesis_verdict call into a styled edge_add
   assert.equal(event.confidence, 92);
 });
 
+test("an edge_added event carries the verdict call's id so a later second opinion can find its card", () => {
+  const event = toBoardEvent({
+    type: "tool_call",
+    toolCallId: "call_verdict_7",
+    toolName: "record_hypothesis_verdict",
+    args: { hypothesis: "Refunds spiked", evidenceSource: "get_refund_events", verdict: "rejected", confidence: 95 },
+  });
+  assert.equal(event.verdictId, "call_verdict_7");
+});
+
 test("toBoardEvent skips (returns null for) a malformed verdict instead of crashing the relay (edge case: bad model output)", () => {
   const event = toBoardEvent({
     type: "tool_call",
